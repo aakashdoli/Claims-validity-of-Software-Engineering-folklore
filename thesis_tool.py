@@ -7,25 +7,20 @@ import time
 import os
 from dotenv import load_dotenv
 
-# --- Load Environment Variables ---
 load_dotenv()
 
-# --- Configuration ---
 st.set_page_config(page_title="Claims Extractor", layout="wide")
 st.title("📚 Claims Extractor (BTH Azure OpenAI)")
 
-
-# --- Sidebar ---
 with st.sidebar:
     st.header("BTH Azure Settings")
     
-    # 1. Get values from .env or use BTH defaults
+    # We grab these defaults from the environment so you don't have to type them every time you reload
     env_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://bth-ai.azure-api.net/student")
     env_key = os.getenv("AZURE_OPENAI_API_KEY", "")
     env_deployment = os.getenv("AZURE_DEPLOYMENT_NAME", "gpt-4o-mini")
     env_version = os.getenv("AZURE_API_VERSION", "2024-02-15-preview")
 
-    # 2. Input fields (Auto-filled)
     azure_endpoint = st.text_input("Azure Endpoint", value=env_endpoint)
     api_key = st.text_input("Azure API Key", value=env_key, type="password")
     deployment_name = st.text_input("Deployment Name", value=env_deployment)
@@ -39,7 +34,6 @@ with st.sidebar:
         ("Strict Academic (Definitions)", "Few-Shot (Examples)")
     )
 
-# --- PDF Processing ---
 def extract_text_from_pdf(uploaded_file):
     try:
         pdf_reader = PyPDF2.PdfReader(uploaded_file)
@@ -53,10 +47,10 @@ def extract_text_from_pdf(uploaded_file):
         st.error(f"Error reading PDF: {e}")
         return []
 
-# --- Azure Analysis Logic ---
 def analyze_with_azure(client, model_name, prompt, page_num):
     try:
-        # Call the BTH API
+        # We explicitly enforce JSON mode here.
+        # This prevents the model from adding conversational fluff like "Here is your JSON:" which breaks parsing.
         response = client.chat.completions.create(
             model=model_name,
             messages=[
@@ -72,7 +66,6 @@ def analyze_with_azure(client, model_name, prompt, page_num):
         st.error(f"Error on Page {page_num}: {e}")
         return []
 
-# --- Prompt Construction ---
 def construct_prompt(text_chunk, page_num, strategy_type):
     if strategy_type == "Strict Academic (Definitions)":
         return f"""
@@ -88,7 +81,6 @@ def construct_prompt(text_chunk, page_num, strategy_type):
         {text_chunk}
         """
     else:
-        # Few-Shot Strategy
         return f"""
         Extract claims from Page {page_num}.
         
@@ -103,7 +95,6 @@ def construct_prompt(text_chunk, page_num, strategy_type):
         {text_chunk}
         """
 
-# --- Main App ---
 uploaded_file = st.file_uploader("Upload PDF Document", type=["pdf"])
 
 if uploaded_file:
@@ -112,7 +103,6 @@ if uploaded_file:
     else:
         if st.button("Start Analysis"):
             
-            # Initialize Client with BTH settings
             client = AzureOpenAI(
                 api_key=api_key,
                 api_version=api_version,
@@ -128,7 +118,6 @@ if uploaded_file:
             
             total_pages = len(pages_data)
             
-            # Process Loop
             for index, item in enumerate(pages_data):
                 progress = (index + 1) / total_pages
                 progress_bar.progress(progress)
@@ -138,24 +127,24 @@ if uploaded_file:
                 result_json = analyze_with_azure(client, deployment_name, prompt, item['page'])
                 
                 if result_json:
-                    # Handle JSON variations
+                    # Sometimes the API wraps the list in a key like "claims", sometimes it returns the list directly.
+                    # This check handles both cases so the app doesn't crash.
                     claims_list = result_json.get("claims", []) if isinstance(result_json, dict) else result_json
                     
                     for entry in claims_list:
                         entry['page_number'] = item['page']
                         all_claims.append(entry)
                 
-                # Tiny pause to be polite to the university server
+                # A small sleep to prevent overwhelming the BTH student server
                 time.sleep(0.1)
             
-            # Finish
             status_text.text("Done!")
             st.success("Analysis Complete!")
             
             if all_claims:
                 df = pd.DataFrame(all_claims)
                 
-                # Clean up columns
+                # Normalize columns to ensure the CSV structure is consistent even if some fields are missing
                 desired_cols = ['page_number', 'claim', 'has_citation', 'source_context']
                 for c in desired_cols:
                     if c not in df.columns: df[c] = "N/A"

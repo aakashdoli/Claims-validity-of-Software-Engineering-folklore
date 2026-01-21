@@ -7,18 +7,17 @@ import time
 import os
 from dotenv import load_dotenv
 
-# --- Load Environment Variables ---
+# Load secrets from the .env file if it exists
 load_dotenv()
 
-# --- Configuration ---
 st.set_page_config(page_title="Thesis Batch Processor", layout="wide")
 st.title("📚 Thesis Batch Claim Validator (Multiple Books)")
 st.markdown("Created for Doli Aakash & Ekshith Satnur | Powered by BTH AI API")
 
-# --- Sidebar ---
 with st.sidebar:
     st.header("BTH Azure Settings")
     
+    # Grab defaults from environment variables so we don't have to re-type them constantly
     env_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "https://bth-ai.azure-api.net/student")
     env_key = os.getenv("AZURE_OPENAI_API_KEY", "")
     env_deployment = os.getenv("AZURE_DEPLOYMENT_NAME", "gpt-4o-mini")
@@ -35,8 +34,8 @@ with st.sidebar:
         ("Strict Academic (Definitions)", "Few-Shot (Examples)")
     )
 
-# --- PDF Processing ---
 def extract_text_from_pdf(uploaded_file):
+    # Simple reader that iterates through pages and pulls raw text
     try:
         pdf_reader = PyPDF2.PdfReader(uploaded_file)
         text_data = []
@@ -49,8 +48,8 @@ def extract_text_from_pdf(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return []
 
-# --- Azure Logic ---
 def analyze_with_azure(client, model_name, prompt):
+    # We force the model to output JSON so we can easily parse the results later
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -63,9 +62,9 @@ def analyze_with_azure(client, model_name, prompt):
         )
         return json.loads(response.choices[0].message.content)
     except Exception:
+        # If the API fails for one chunk, just return empty so the whole batch doesn't crash
         return []
 
-# --- Prompt ---
 def construct_prompt(text_chunk, page_num, strategy_type):
     if strategy_type == "Strict Academic (Definitions)":
         return f"""
@@ -75,6 +74,7 @@ def construct_prompt(text_chunk, page_num, strategy_type):
         TEXT: {text_chunk}
         """
     else:
+        # Giving the model examples (few-shot) usually improves accuracy
         return f"""
         Extract claims from Page {page_num}.
         EXAMPLES:
@@ -84,8 +84,7 @@ def construct_prompt(text_chunk, page_num, strategy_type):
         TEXT: {text_chunk}
         """
 
-# --- Main App ---
-# ALLOW MULTIPLE FILES HERE
+# Allow the user to upload multiple PDFs at once
 uploaded_files = st.file_uploader("Upload PDF Books (Select Multiple)", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
@@ -102,20 +101,18 @@ if uploaded_files:
             
             master_claims_list = []
             
-            # Create a progress bar for the WHOLE batch
+            # Setup a single progress bar to track the entire batch job
             total_progress_bar = st.progress(0)
             status_text = st.empty()
             
             for file_index, uploaded_file in enumerate(uploaded_files):
                 status_text.text(f"📖 Processing Book {file_index + 1}/{len(uploaded_files)}: {uploaded_file.name}...")
                 
-                # 1. Read PDF
                 pages_data = extract_text_from_pdf(uploaded_file)
                 total_pages = len(pages_data)
                 
-                # 2. Process Pages
                 for i, item in enumerate(pages_data):
-                    # Update granular progress
+                    # Calculate overall progress across all files and pages
                     current_progress = (file_index / len(uploaded_files)) + ((i / total_pages) / len(uploaded_files))
                     total_progress_bar.progress(min(current_progress, 1.0))
                     
@@ -123,13 +120,14 @@ if uploaded_files:
                     result_json = analyze_with_azure(client, deployment_name, prompt)
                     
                     if result_json:
+                        # Handle cases where the API returns a list directly or a dict with a 'claims' key
                         claims = result_json.get("claims", []) if isinstance(result_json, dict) else result_json
                         for c in claims:
-                            c['filename'] = uploaded_file.name # Add filename tag
+                            c['filename'] = uploaded_file.name 
                             c['page_number'] = item['page']
                             master_claims_list.append(c)
                     
-                    # Be polite to the API
+                    # Brief pause to avoid hitting the API rate limits
                     time.sleep(0.1)
             
             total_progress_bar.progress(1.0)
@@ -139,7 +137,7 @@ if uploaded_files:
             if master_claims_list:
                 df = pd.DataFrame(master_claims_list)
                 
-                # Order columns nicely
+                # Organize columns cleanly before showing the user
                 cols = ['filename', 'page_number', 'claim', 'has_citation', 'source_context']
                 for c in cols:
                     if c not in df.columns: df[c] = "-"

@@ -7,24 +7,20 @@ import time
 import os
 from dotenv import load_dotenv
 
-# --- Load .env (If you want to store Gemini key there) ---
 load_dotenv()
 
-# --- Configuration ---
 st.set_page_config(page_title="Thesis Batch Tool (Gemini)", layout="wide")
 st.title("📚 Thesis Batch Processor (Gemini Edition)")
 st.markdown("Created for Doli Aakash & Ekshith Satnur | **Optimized for High Volume**")
 st.info("ℹ️ This tool runs slower to prevent crashing, but it can process unlimited books for free.")
 
-# --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
     
-    # Try getting key from .env, otherwise sidebar input
+    # Grab the key from the environment if available so we don't have to paste it every time
     env_gemini_key = os.getenv("GEMINI_API_KEY", "")
     api_key = st.text_input("Gemini API Key", value=env_gemini_key, type="password")
     
-    # 1.5 Flash is the best balance of Speed/Free Tier limits
     model_name = st.selectbox("Select Model", ["gemini-2.5-flash", "gemini-1.5-pro"])
     
     strategy = st.selectbox(
@@ -35,7 +31,6 @@ with st.sidebar:
     if api_key:
         genai.configure(api_key=api_key)
 
-# --- PDF Processing ---
 def extract_text_from_pdf(uploaded_file):
     try:
         pdf_reader = PyPDF2.PdfReader(uploaded_file)
@@ -49,33 +44,30 @@ def extract_text_from_pdf(uploaded_file):
         st.error(f"Error reading {uploaded_file.name}: {e}")
         return []
 
-# --- Smart Gemini Call (The "Permanent Solution") ---
 def analyze_with_retry(model, prompt, page_num):
-    """
-    If Google says "Too Fast" (429), we wait and try again.
-    """
+    # The API throws a 429 error if we go too fast. 
+    # This loop catches that specific error, waits a bit, and tries again.
     max_retries = 5
-    base_wait = 10  # Start with 10 seconds wait
+    base_wait = 10 
     
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
+            # Cleanup the response to ensure it's valid JSON
             return json.loads(response.text.replace("```json", "").replace("```", "").strip())
         except Exception as e:
             error_msg = str(e)
             
-            # Check for Rate Limit (429)
             if "429" in error_msg or "resource_exhausted" in error_msg.lower():
                 wait_time = base_wait * (attempt + 1)
                 st.warning(f"⏳ Rate limit on Page {page_num}. Pausing {wait_time}s...")
                 time.sleep(wait_time)
             else:
-                # If it's another error, return empty to skip page but keep running
+                # If it's a non-recoverable error, just skip this page
                 return []
     
     return []
 
-# --- Prompt ---
 def construct_prompt(text_chunk, page_num, strategy_type):
     if strategy_type == "Strict Academic (Definitions)":
         return f"""
@@ -93,7 +85,6 @@ def construct_prompt(text_chunk, page_num, strategy_type):
         TEXT: {text_chunk}
         """
 
-# --- Main App ---
 uploaded_files = st.file_uploader("Upload 10+ PDF Books", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files and api_key:
@@ -102,7 +93,6 @@ if uploaded_files and api_key:
         model = genai.GenerativeModel(model_name)
         master_claims_list = []
         
-        # Global Progress Bar
         total_bar = st.progress(0)
         status_text = st.empty()
         
@@ -110,26 +100,23 @@ if uploaded_files and api_key:
             status_text.text(f"📖 Reading Book {file_idx+1}: {file.name}...")
             pages = extract_text_from_pdf(file)
             
-            # Page Loop
             for i, page in enumerate(pages):
-                # Calculate progress
+                # Update the progress bar relative to total work (files * pages)
                 prog = (file_idx / len(uploaded_files)) + ((i / len(pages)) / len(uploaded_files))
                 total_bar.progress(min(prog, 1.0))
                 
-                # Construct Prompt & Call API
                 prompt = construct_prompt(page['text'], page['page'], strategy)
                 result = analyze_with_retry(model, prompt, page['page'])
                 
                 if result:
-                    # Append result to master list
                     claims = result.get("claims", []) if isinstance(result, dict) else result
                     for c in claims:
                         c['filename'] = file.name
                         c['page_number'] = page['page']
                         master_claims_list.append(c)
                 
-                # --- SAFETY PAUSE ---
-                # This ensures we don't hit the 15 RPM limit of Gemini Free Tier
+                # Crucial: The free tier usually allows ~15 calls/min. 
+                # This pause keeps us safe from hitting the limit.
                 time.sleep(4) 
         
         total_bar.progress(1.0)

@@ -7,35 +7,34 @@ import os
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv  # <--- NEW IMPORT
+from dotenv import load_dotenv
 
-# --- CONFIGURATION ---
-
-# 1. Load the variables from the .env file
+# Load environment variables early so we don't accidentally commit keys to version control
 load_dotenv() 
 
-# 2. Get the key securely
 api_key = os.getenv("GOOGLE_API_KEY")
 
+# It's better to crash immediately if the key is missing than to fail silently later
 if not api_key:
     raise ValueError("API Key not found! Make sure you have a .env file with GOOGLE_API_KEY in it.")
 
 genai.configure(api_key=api_key)
 
-# --- 1. TEXT EXTRACTORS ---
+# We use the flash model because it's faster and cheaper for high-volume text analysis
+model = genai.GenerativeModel('gemini-1.5-flash')
+
 def extract_text_from_pdf(pdf_path):
-    """Yields page number and text from PDF."""
     print(f"Processing PDF: {pdf_path}...")
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             page_number = f"Page {i + 1}"
             
+            # Skip empty or very short pages (like title pages) to save API tokens
             if text and len(text) > 100: 
                 yield page_number, text
 
 def extract_text_from_epub(epub_path):
-    """Yields chapter title and text from EPUB."""
     print(f"Processing EPUB: {epub_path}...")
     try:
         book = epub.read_epub(epub_path)
@@ -45,6 +44,7 @@ def extract_text_from_epub(epub_path):
 
     for item in book.get_items():
         if item.get_type() == ebooklib.ITEM_DOCUMENT:
+            # EPUBs are basically HTML, so we need BeautifulSoup to strip tags and get clean text
             soup = BeautifulSoup(item.get_content(), 'html.parser')
             text = soup.get_text()
             chapter_title = item.get_name()
@@ -52,11 +52,9 @@ def extract_text_from_epub(epub_path):
             if len(text) > 100:
                 yield f"File: {chapter_title}", text
 
-# --- 2. THE BRAIN (GEMINI API) ---
-
 def analyze_chunk_with_gemini(text, location_id, book_title):
-    """Sends text to Gemini to find folklore & citations."""
-    
+    # This prompt forces the model to act as a filter, only returning structured JSON
+    # so we don't have to parse natural language responses later.
     prompt = f"""
     You are a Software Engineering Researcher. Analyze this text from "{book_title}" ({location_id}).
 
@@ -89,24 +87,22 @@ def analyze_chunk_with_gemini(text, location_id, book_title):
         response = model.generate_content(prompt)
         raw = response.text.strip()
         
-        # Clean up Markdown formatting if Gemini adds it
+        # Sometimes the model wraps the JSON in markdown blocks, so we clean that up just in case
         if raw.startswith("```json"):
             raw = raw.replace("```json", "").replace("```", "")
         
         return json.loads(raw)
         
     except Exception as e:
-        # If it fails, print a small error but keep running
+        # Don't let one bad chunk crash the whole script; just log it and move on
         print(f"  [!] Error on {location_id}: {e}")
         return []
-
-# --- 3. MAIN PIPELINE ---
 
 def process_book(file_path):
     book_title = os.path.basename(file_path)
     all_claims = []
     
-    # Select Extractor
+    # Simple router to handle different file types
     if file_path.lower().endswith('.pdf'):
         iterator = extract_text_from_pdf(file_path)
     elif file_path.lower().endswith('.epub'):
@@ -115,7 +111,6 @@ def process_book(file_path):
         print(f"Unsupported file type: {file_path}")
         return []
 
-    # Run Analysis
     print(f"--- Starting Analysis for {book_title} ---")
     for location, text in iterator:
         print(f"  Scanning {location}...")
@@ -129,32 +124,30 @@ def process_book(file_path):
                 c['Book Title'] = book_title
                 all_claims.append(c)
         
-        # Sleep slightly to be polite to the API
+        # A small sleep helps avoid hitting the API rate limits (HTTP 429)
         time.sleep(0.5)
 
     return all_claims
 
-# --- 4. EXECUTION ---
-
 if __name__ == "__main__":
-    # --- INPUT YOUR BOOK FILENAME HERE ---
-    target_book = "test_conway.pdf"  # <--- CHANGE THIS to your actual file name
+    # Update this filename to whatever book you actually want to mine
+    target_book = "test_conway.pdf"  
     
     if os.path.exists(target_book):
         results = process_book(target_book)
         
         if results:
             df = pd.DataFrame(results)
-            # Ensure correct column order
+            
+            # Reorder columns to make the CSV easier to read for humans
             desired_order = ['Claim Text', 'Book Title', 'Page Number', 'Has Citation (Yes/No)', 'Confidence']
-            # Only select columns that exist to avoid errors if the LLM hallucinated keys
             final_cols = [c for c in desired_order if c in df.columns]
             df = df[final_cols]
             
             csv_name = "mined_claims.csv"
             df.to_csv(csv_name, index=False)
             print(f"\nSUCCESS! Saved {len(results)} claims to '{csv_name}'.")
-            print(df.head()) # Show preview
+            print(df.head()) 
         else:
             print("\nAnalysis complete. No claims found.")
     else:
