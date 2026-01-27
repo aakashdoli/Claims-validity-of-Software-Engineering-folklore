@@ -1,0 +1,8 @@
+ebooklib
+beautifulsoup4
+pdfplumber
+pysbd
+pandas
+openpyxl
+openai
+streamlit

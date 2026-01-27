@@ -1,0 +1,54 @@
+# se-claims-tool
+
+Extract **verbatim** causal claims (sentence-level) from software engineering books (EPUB first-class, PDF fallback),
+and export results to **JSONL + CSV**, with an evaluation mode for **Manual vs AI** precision/recall.
+
+## Install
+
+```bash
+python -m venv .venv
+# Windows: .venv\\Scripts\\activate
+source .venv/bin/activate
+
+pip install -U pip
+pip install -e .
+```
+
+## Azure OpenAI setup (optional)
+
+Copy `.env.example` to `.env` and set:
+
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT`
+
+## Extract from a single book
+
+```bash
+se-claims-tool extract --input path/to/book.epub --outdir out/book1 --mock-llm
+# or use Azure:
+se-claims-tool extract --input path/to/book.epub --outdir out/book1
+```
+
+## Extract from a folder / ZIP (12-book corpus)
+
+```bash
+se-claims-tool extract-batch --inputs path/to/big12_folder --outdir out/big12 --mock-llm
+# or use Azure:
+se-claims-tool extract-batch --inputs path/to/big12_folder --outdir out/big12
+```
+
+Outputs include:
+- per-book: `<outdir>/<filename>/claims.jsonl`, `claims.csv`, `run_metadata.json`
+- corpus: `<outdir>/all_claims.jsonl`, `<outdir>/all_claims.csv`, `<outdir>/manifest.csv`, `<outdir>/run_summary.json`, `<outdir>/results.zip`
+
+## Evaluate (Manual vs AI)
+
+```bash
+se-claims-tool eval --ai-claims out/big12/all_claims.csv --human path/to/human.csv --outdir out/eval
+```
+
+Produces:
+- `eval_metrics.json` (TP/FP/FN, precision/recall)
+- `eval_per_human_claim.csv` (each human claim marked MATCH or MISS)
