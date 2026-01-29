@@ -1,201 +1,290 @@
-# ui/app.py
 from __future__ import annotations
 
-import os
-import tempfile
+import hashlib
+import logging
+import sys
 from pathlib import Path
+from typing import List, Optional
 
+import pandas as pd
 import streamlit as st
 
-from se_claims_tool.config import RunConfig
-from se_claims_tool.logging_utils import setup_logger
+# Ensure project package imports work when running: streamlit run ui/app.py
+REPO_ROOT = Path(__file__).resolve().parents[1]  # .../se-folklore-claims
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 from se_claims_tool.batch_pipeline import run_corpus
+from se_claims_tool.config import RunConfig
+from se_claims_tool.llm.claim_detector import RuleBasedClaimDetector
 
-# Offline-first (no API)
-from se_claims_tool.llm.claim_detector import RuleBasedClaimDetector, AzureClaimDetector
-from se_claims_tool.llm.azure_client import AzureChatClient
-
-
-st.set_page_config(page_title="SE Folklore Claims Extractor", layout="wide")
-
-st.title("Claims Validity of Software Engineering Folklore")
-st.caption(
-    "Upload EPUB/PDF books (or one ZIP). Extract causal claims and download CSV/JSONL results. "
-    "Zero-hallucination: claims are always verbatim from the source."
-)
-
-logger = setup_logger("INFO")
+# Paths
+UPLOAD_DIR = REPO_ROOT / "books_upload"
+DEFAULT_OUTDIR = REPO_ROOT / "out_ui"
 
 
-# -------------------------
-# Sidebar settings
-# -------------------------
-with st.sidebar:
-    st.header("Run settings")
+class _StreamlitLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.lines: List[str] = []
 
-    use_offline = st.checkbox("Offline mode (no Azure, recommended for now)", value=True)
-
-    max_calls = st.number_input("Max LLM calls (cost control)", min_value=0, value=0, step=100)
-    max_calls = None if max_calls == 0 else int(max_calls)
-
-    st.markdown("---")
-    st.subheader("Candidate filter")
-    default_cfg = RunConfig()
-    cues = st.text_area(
-        "Cue phrases (one per line)",
-        value="\n".join(default_cfg.cue_phrases),
-        height=180
-    )
-
-    st.markdown("---")
-    st.subheader("Azure settings (only if Offline mode is OFF)")
-    st.text_input(
-        "AZURE_OPENAI_ENDPOINT",
-        key="AZURE_OPENAI_ENDPOINT",
-        value=os.environ.get("AZURE_OPENAI_ENDPOINT", "https://bth-ai.azure-api.net/student"),
-        help="Use base endpoint WITHOUT '/openai' suffix. Example: https://bth-ai.azure-api.net/student"
-    )
-    st.text_input(
-        "AZURE_OPENAI_API_KEY",
-        key="AZURE_OPENAI_API_KEY",
-        value=os.environ.get("AZURE_OPENAI_API_KEY", ""),
-        type="password"
-    )
-    st.text_input(
-        "AZURE_OPENAI_API_VERSION",
-        key="AZURE_OPENAI_API_VERSION",
-        value=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
-    )
-    st.text_input(
-        "AZURE_OPENAI_DEPLOYMENT",
-        key="AZURE_OPENAI_DEPLOYMENT",
-        value=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
-    )
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(self.format(record))
 
 
-# -------------------------
-# Upload UI
-# -------------------------
-st.markdown("### Upload books")
-uploaded_files = st.file_uploader(
-    "Upload multiple EPUB/PDF files OR upload a single ZIP containing them.",
-    type=["epub", "pdf", "zip"],
-    accept_multiple_files=True
-)
+def _setup_logger(level: str = "INFO") -> tuple[logging.Logger, _StreamlitLogHandler]:
+    logger = logging.getLogger("se_claims_tool_ui")
+    logger.setLevel(getattr(logging, (level or "INFO").upper(), logging.INFO))
+    logger.handlers.clear()
+    logger.propagate = False
 
-run_btn = st.button("Run extraction", type="primary", disabled=(not uploaded_files))
-
-
-def _save_uploads_to_temp(uploaded) -> Path:
-    tmpdir = Path(tempfile.mkdtemp(prefix="se_claims_upload_"))
-    for uf in uploaded:
-        out = tmpdir / uf.name
-        out.write_bytes(uf.getbuffer())
-    return tmpdir
+    handler = _StreamlitLogHandler()
+    handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+    logger.addHandler(handler)
+    return logger, handler
 
 
-def _find_single_zip(tmpdir: Path) -> Path | None:
-    """If the upload is exactly one zip file (and nothing else), return it."""
-    items = list(tmpdir.iterdir())
-    if len(items) == 1 and items[0].suffix.lower() == ".zip":
-        return items[0]
+def _sha256_bytes(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _safe_save_upload(uploaded_file, target_dir: Path) -> tuple[Path, bool]:
+    """
+    Saves the uploaded file deterministically.
+
+    Dedup rule:
+    - If another file in target_dir has the same content hash, do not save again.
+      Return the existing path and is_duplicate=True.
+
+    If not duplicate:
+    - Save using original filename.
+    - If name collision exists, append _1, _2, ... deterministically.
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    data = uploaded_file.getbuffer().tobytes()
+    incoming_hash = _sha256_bytes(data)
+
+    for existing in target_dir.iterdir():
+        if not existing.is_file():
+            continue
+        if existing.suffix.lower() not in [".epub", ".azw3", ".zip"]:
+            continue
+        try:
+            if _sha256_file(existing) == incoming_hash:
+                return existing, True
+        except Exception:
+            continue
+
+    target = target_dir / uploaded_file.name
+    if target.exists():
+        stem = target.stem
+        suffix = target.suffix
+        i = 1
+        while True:
+            candidate = target_dir / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                target = candidate
+                break
+            i += 1
+
+    with open(target, "wb") as f:
+        f.write(data)
+
+    return target, False
+
+
+def _list_books(folder: Path) -> List[Path]:
+    if not folder.exists():
+        return []
+    files: List[Path] = []
+    for ext in ["*.epub", "*.EPUB", "*.azw3", "*.AZW3", "*.zip", "*.ZIP"]:
+        files.extend(folder.rglob(ext))
+    return sorted(files)
+
+
+def _read_bytes(path: Path) -> Optional[bytes]:
+    if path.exists() and path.is_file():
+        return path.read_bytes()
     return None
 
 
-# -------------------------
-# Run extraction
-# -------------------------
+st.set_page_config(page_title="SE Folklore Claim Extraction (RQ1)", layout="wide")
+st.title("SE Folklore Claim Extraction Tool (RQ1)")
+
+st.write(
+    "Upload EPUB/AZW3 (or a ZIP containing them). The tool extracts one claim per row, "
+    "adds traceability, and assigns conservative citation_status (cited / ambiguous / not_cited)."
+)
+
+UPLOAD_DIR.mkdir(exist_ok=True)
+DEFAULT_OUTDIR.mkdir(exist_ok=True)
+
+with st.sidebar:
+    st.header("Settings")
+
+    log_level = st.selectbox("Log level", ["INFO", "DEBUG", "WARNING", "ERROR"], index=0)
+
+    max_calls = st.number_input(
+        "Max detector calls (optional cap)",
+        min_value=0,
+        value=0,
+        step=100,
+        help="0 means no cap",
+    )
+
+    outdir_name = st.text_input("Output folder name", value="out_ui")
+    outdir = REPO_ROOT / outdir_name
+
+    st.caption("AZW3 requires calibre ebook-convert installed locally.")
+    st.caption("No online scraping. Only processes files you upload.")
+
+st.header("1) Upload books")
+uploaded = st.file_uploader(
+    "Choose EPUB/AZW3 files (or ZIP)",
+    type=["epub", "azw3", "zip"],
+    accept_multiple_files=True,
+)
+
+if uploaded:
+    saved_paths = []
+    dup_count = 0
+    for f in uploaded:
+        saved_path, is_dup = _safe_save_upload(f, UPLOAD_DIR)
+        saved_paths.append(saved_path)
+        if is_dup:
+            dup_count += 1
+
+    st.success(f"Processed {len(uploaded)} file(s). Saved new: {len(uploaded) - dup_count}. Duplicates skipped: {dup_count}.")
+    if saved_paths:
+        st.caption("Saved to: books_upload/")
+
+books = _list_books(UPLOAD_DIR)
+
+col1, col2 = st.columns([2, 1])
+with col1:
+    st.subheader("Files in upload folder")
+    if books:
+        df_books = pd.DataFrame(
+            [
+                {
+                    "filename": p.name,
+                    "stem": p.stem,
+                    "ext": p.suffix.lower(),
+                    "size_kb": round(p.stat().st_size / 1024, 1),
+                }
+                for p in books
+            ]
+        )
+        st.dataframe(df_books, use_container_width=True, hide_index=True)
+    else:
+        st.info("No EPUB/AZW3/ZIP files found yet in books_upload/.")
+
+with col2:
+    st.subheader("Manage uploads")
+    if st.button("Clear uploaded files", type="secondary", disabled=not bool(books)):
+        for p in books:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        st.rerun()
+
+st.header("2) Run extraction")
+
+available_stems = [p.stem for p in books if p.suffix.lower() != ".zip"]
+pilot = st.multiselect(
+    "Pilot books (select 2, or leave empty to run all)",
+    options=available_stems,
+    default=available_stems[:2] if len(available_stems) >= 2 else [],
+)
+
+run_btn = st.button("Run extraction", type="primary", disabled=not bool(books))
+
 if run_btn:
-    # Build config
-    cue_list = [c.strip() for c in cues.splitlines() if c.strip()]
-    cfg = RunConfig(max_llm_calls=max_calls, store_only_snippets=True)
-    cfg.cue_phrases = cue_list
+    logger, handler = _setup_logger(log_level)
 
-    # Pick detector
-    if use_offline:
-        detector = RuleBasedClaimDetector()
-        st.info("Using OFFLINE rule-based detector (no API calls).")
-    else:
-        # Apply env vars from sidebar inputs
-        os.environ["AZURE_OPENAI_ENDPOINT"] = st.session_state["AZURE_OPENAI_ENDPOINT"].strip()
-        os.environ["AZURE_OPENAI_API_KEY"] = st.session_state["AZURE_OPENAI_API_KEY"].strip()
-        os.environ["AZURE_OPENAI_API_VERSION"] = st.session_state["AZURE_OPENAI_API_VERSION"].strip()
-        os.environ["AZURE_OPENAI_DEPLOYMENT"] = st.session_state["AZURE_OPENAI_DEPLOYMENT"].strip()
+    cfg = RunConfig(max_llm_calls=None if max_calls == 0 else int(max_calls))
+    detector = RuleBasedClaimDetector()
 
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    with st.spinner("Running extraction..."):
         try:
-            client = AzureChatClient()
-            detector = AzureClaimDetector(client)
-            st.success("Azure client configured.")
+            summary = run_corpus(
+                inputs=str(UPLOAD_DIR),
+                outdir=str(outdir),
+                cfg=cfg,
+                detector=detector,
+                logger=logger,
+                pilot_books=pilot if pilot else None,
+            )
+            st.success("Extraction completed.")
         except Exception as e:
-            st.error(f"Azure configuration error: {e}")
-            st.stop()
+            st.error(f"Run failed: {e}")
+            summary = None
 
-    with st.spinner("Saving uploads..."):
-        tmpdir = _save_uploads_to_temp(uploaded_files)
+    st.subheader("Logs")
+    st.code("\n".join(handler.lines[-400:]) if handler.lines else "No logs captured.")
 
-    zip_input = _find_single_zip(tmpdir)
-    inputs_path = str(zip_input) if zip_input else str(tmpdir)
+    if summary:
+        st.subheader("Run summary")
+        st.json(summary)
 
-    outdir = Path(tempfile.mkdtemp(prefix="se_claims_out_"))
+        combined_csv = outdir / "all_claims.csv"
+        per_book_csv = outdir / "per_book_summary.csv"
+        results_zip = outdir / "results.zip"
 
-    with st.spinner("Running extraction on all uploaded books..."):
-        summary = run_corpus(
-            inputs=inputs_path,
-            outdir=str(outdir),
-            cfg=cfg,
-            detector=detector,
-            logger=logger,
-        )
+        st.subheader("Downloads")
+        dcol1, dcol2, dcol3 = st.columns(3)
 
-    st.success("Done!")
+        with dcol1:
+            st.write("Combined claims CSV")
+            data = _read_bytes(combined_csv)
+            if data:
+                st.download_button("Download all_claims.csv", data=data, file_name="all_claims.csv", mime="text/csv")
+            else:
+                st.info("Not found.")
 
-    # Summary cards
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Books found", summary.get("books_count", 0))
-    c2.metric("Succeeded", summary.get("books_succeeded", 0))
-    c3.metric("Failed", summary.get("books_failed", 0))
-    c4.metric("Total claims", summary.get("total_claims", 0))
+        with dcol2:
+            st.write("Per-book summary CSV")
+            data = _read_bytes(per_book_csv)
+            if data:
+                st.download_button(
+                    "Download per_book_summary.csv",
+                    data=data,
+                    file_name="per_book_summary.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("Not found.")
 
-    # Downloads
-    all_csv = outdir / "all_claims.csv"
-    all_jsonl = outdir / "all_claims.jsonl"
-    results_zip = outdir / "results.zip"
+        with dcol3:
+            st.write("Zipped results")
+            data = _read_bytes(results_zip)
+            if data:
+                st.download_button("Download results.zip", data=data, file_name="results.zip", mime="application/zip")
+            else:
+                st.info("Not found.")
 
-    st.markdown("### Download outputs")
-    colA, colB, colC = st.columns(3)
+        st.subheader("Preview (first 50 rows)")
+        if combined_csv.exists():
+            try:
+                df = pd.read_csv(combined_csv)
+                st.dataframe(df.head(50), use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not preview CSV: {e}")
 
-    if all_csv.exists():
-        colA.download_button(
-            "Download all_claims.csv",
-            data=all_csv.read_bytes(),
-            file_name="all_claims.csv",
-            mime="text/csv"
-        )
-    else:
-        colA.info("all_claims.csv not found (no claims extracted).")
-
-    if all_jsonl.exists():
-        colB.download_button(
-            "Download all_claims.jsonl",
-            data=all_jsonl.read_bytes(),
-            file_name="all_claims.jsonl",
-            mime="application/jsonl"
-        )
-    else:
-        colB.info("all_claims.jsonl not found.")
-
-    if results_zip.exists():
-        colC.download_button(
-            "Download results.zip (everything)",
-            data=results_zip.read_bytes(),
-            file_name="results.zip",
-            mime="application/zip"
-        )
-    else:
-        colC.info("results.zip not found.")
-
-    # Errors
-    errs = summary.get("errors", [])
-    if errs:
-        st.warning("Some files failed. See details below.")
-        st.json(errs)
+st.divider()
+st.caption("Run command: streamlit run ui/app.py")

@@ -9,6 +9,7 @@ src/se_claims_tool/cli.py
 src/se_claims_tool/config.py
 src/se_claims_tool/logging_utils.py
 src/se_claims_tool/models.py
+src/se_claims_tool/models_rq1.py
 src/se_claims_tool/pipeline.py
 src/se_claims_tool/tokenize.py
 src/se_claims_tool.egg-info/PKG-INFO
@@ -21,10 +22,13 @@ src/se_claims_tool/eval/__init__.py
 src/se_claims_tool/eval/evaluator.py
 src/se_claims_tool/export/__init__.py
 src/se_claims_tool/export/exporter.py
+src/se_claims_tool/export/schema_validate.py
 src/se_claims_tool/ingest/__init__.py
+src/se_claims_tool/ingest/azw3_ingest.py
 src/se_claims_tool/ingest/common.py
 src/se_claims_tool/ingest/epub_ingest.py
 src/se_claims_tool/ingest/pdf_ingest.py
+src/se_claims_tool/ingest/structures.py
 src/se_claims_tool/llm/__init__.py
 src/se_claims_tool/llm/azure_client.py
 src/se_claims_tool/llm/claim_detector.py

@@ -1,10 +1,9 @@
 from __future__ import annotations
-import json
+
 import re
 from dataclasses import dataclass
-from typing import Dict, Any, List
+from typing import Any, Dict
 
-from ..models import SentenceRecord
 from .prompt_templates import SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
 
 
@@ -17,135 +16,135 @@ class DetectionResult:
     raw: Dict[str, Any]
 
 
-# ---------------------------
-# OFFLINE (NO API) DETECTOR
-# ---------------------------
 class RuleBasedClaimDetector:
     """
-    Offline detector: strict causal-language rules.
-    - Zero hallucination: returns sentence verbatim or NO_CLAIM
-    - Filters intention/aspiration phrasing (e.g., "strive to", "aim to")
-    - Requires explicit cause/effect indicators
+    Precision-first detector aligned to thesis claim definition:
+    - declarative, generalizable relationship, effect, recommendation, explanation
+    - includes normative, causal, comparative, quantitative, descriptive-generalization
+    - excludes headings, fragments, anecdotes without generalization
     """
 
-    # Phrases that often indicate intent rather than a claim of effect
     _INTENT_PHRASES = [
         "strive to", "aim to", "try to", "trying to", "attempt to", "plan to",
-        "hope to", "want to", "wants to", "would like to", "we should",
-        "should try", "should aim", "focus on", "focusing on",
+        "hope to", "want to", "would like to",
     ]
 
-    # Strong causal connectors
-    _CONNECTORS = [
+    _NORMATIVE = [
+        r"\bshould\b", r"\bmust\b", r"\brecommend(ed)?\b", r"\bbest practice\b",
+        r"\bit is better to\b", r"\byou should\b",
+    ]
+
+    _CAUSAL = [
         r"\bleads?\s+to\b",
         r"\bresults?\s+in\b",
         r"\bcauses?\b",
+        r"\bprevents?\b",
+        r"\benables?\b",
         r"\bdrives?\b",
         r"\bcontributes?\s+to\b",
-        r"\bcreates?\b",
-        r"\btriggers?\b",
-        r"\benables?\b",
-        r"\bprevents?\b",
     ]
 
-    # Change verbs with outcomes (we validate outcomes separately)
-    _CHANGE_VERBS = [
-        r"\bincreases?\b", r"\bdecreases?\b",
-        r"\breduces?\b", r"\blowers?\b", r"\braises?\b",
-        r"\bimproves?\b", r"\bworsens?\b",
-        r"\bboosts?\b", r"\bhurts?\b", r"\bhelps?\b",
-        r"\bmakes?\b",
+    _COMPARATIVE = [
+        r"\bbetter than\b", r"\bworse than\b",
+        r"\bmore than\b", r"\bless than\b",
     ]
 
-    # Common outcomes for SE folklore (expand freely)
-    _OUTCOMES = [
-        "productivity", "speed", "velocity", "throughput", "delivery", "time",
-        "quality", "defects", "bugs", "reliability", "maintainability",
-        "security", "performance", "complexity", "cost", "risk",
-        "collaboration", "communication", "morale", "happiness",
-        "effective", "efficiency", "efficient", "faster", "slower",
-        "easier", "harder", "better", "worse", "unhappy",
-        "nitpicking", "bullying",
+    _QUANT = [
+        r"\b\d+(\.\d+)?\s*%?\b",
+        r"\btwice\b", r"\b\d+\s+times\b",
+        r"\b(increases?|decreases?|reduces?)\s+by\b",
     ]
 
-    # Practice/process vocabulary (broad; helps reduce non-SE sentences)
-    _PRACTICES = [
-        "code review", "reviews", "review",
-        "testing", "tdd", "unit test", "tests",
-        "refactor", "refactoring",
-        "microservices", "monolith",
-        "continuous integration", "ci", "continuous delivery", "cd",
-        "release", "releases", "deploy", "deployment",
-        "linter", "lint", "format", "formatting",
-        "agile", "scrum", "kanban", "sprint", "standup", "retrospective",
-        "pair programming", "pairing",
-        "documentation", "requirements", "estimation",
-        "architecture", "design",
-        "team", "manager", "lead", "leadership", "process",
-        "technical debt",
+    _GENERALIZATION = [
+        r"\boften\b", r"\busually\b", r"\bgenerally\b",
+        r"\btends?\s+to\b", r"\btypically\b",
+        r"\balways\b", r"\bnever\b",
+    ]
+
+    _SE_CONTEXT = [
+        "software", "code", "coding", "developer", "developers", "engineer", "engineers",
+        "testing", "tests", "unit test", "tdd",
+        "code review", "review", "pull request", "pr",
+        "refactor", "refactoring", "technical debt",
+        "architecture", "design", "requirements",
+        "build", "ci", "continuous integration", "deployment", "deploy", "release",
+        "bug", "bugs", "defect", "defects",
+        "maintainability", "performance", "security", "reliability",
+        "team", "teams",
     ]
 
     def __init__(self):
         self._intent_re = re.compile("|".join(re.escape(p) for p in self._INTENT_PHRASES), re.IGNORECASE)
-        self._conn_re = re.compile("|".join(self._CONNECTORS), re.IGNORECASE)
-        self._change_re = re.compile("|".join(self._CHANGE_VERBS), re.IGNORECASE)
 
-        self._outcome_re = re.compile(r"\b(" + "|".join(re.escape(o) for o in self._OUTCOMES) + r")\b", re.IGNORECASE)
-        self._practice_re = re.compile(r"\b(" + "|".join(re.escape(p) for p in self._PRACTICES) + r")\b", re.IGNORECASE)
+        self._norm_re = re.compile("|".join(self._NORMATIVE), re.IGNORECASE)
+        self._causal_re = re.compile("|".join(self._CAUSAL), re.IGNORECASE)
+        self._comp_re = re.compile("|".join(self._COMPARATIVE), re.IGNORECASE)
+        self._quant_re = re.compile("|".join(self._QUANT), re.IGNORECASE)
+        self._gen_re = re.compile("|".join(self._GENERALIZATION), re.IGNORECASE)
 
-    def detect(self, sent: SentenceRecord) -> DetectionResult:
-        txt = (sent.text or "").strip()
+        self._se_re = re.compile(
+            r"\b(" + "|".join(re.escape(t) for t in self._SE_CONTEXT) + r")\b",
+            re.IGNORECASE,
+        )
+
+    def detect(self, sent) -> DetectionResult:
+        txt = (getattr(sent, "text", "") or "").strip()
         low = txt.lower()
 
         if not txt:
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "empty"})
 
-        # Exclude obvious headings / fragments
-        if len(txt) < 15 or txt.endswith(":"):
-            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "too_short_or_heading"})
+        # Exclude headings and fragments
+        if len(txt) < 20:
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "too_short"})
+        if txt.endswith(":"):
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "heading_colon"})
+        if txt.endswith("?"):
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "question"})
 
-        # Intent filter: "strive to", "aim to", etc.
+        # Exclude intent statements
         if self._intent_re.search(txt):
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "intent_phrase"})
 
-        # Must mention some SE practice/process/team context (broad)
-        has_practice = bool(self._practice_re.search(txt))
+        # Must have SE context
+        if not self._se_re.search(txt):
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "no_se_context"})
 
-        # Must have explicit causal connector OR change verb
-        has_connector = bool(self._conn_re.search(txt))
-        has_change = bool(self._change_re.search(txt))
+        # Must have at least one strong claim signal
+        has_norm = bool(self._norm_re.search(txt))
+        has_causal = bool(self._causal_re.search(txt))
+        has_comp = bool(self._comp_re.search(txt))
+        has_quant = bool(self._quant_re.search(txt))
+        has_gen = bool(self._gen_re.search(txt))
 
-        if not (has_connector or has_change):
-            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "no_causal_marker"})
+        if not (has_norm or has_causal or has_comp or has_quant or has_gen):
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "no_claim_signal"})
 
-        # Must mention an outcome-ish term (helps reduce false positives)
-        has_outcome = bool(self._outcome_re.search(txt))
-        if not has_outcome:
-            # Allow some "makes everyone X" cases even if outcome word list misses it
-            if not re.search(r"\bmakes?\s+.+\b(more|less)\b", low):
-                return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "no_outcome_term"})
+        # Exclude pure anecdotes without generalization
+        if re.search(r"\b(i|we)\b", low) and not has_gen and not has_norm:
+            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "anecdote_without_generalization"})
 
-        # If it has causality but no practice terms, still allow if it clearly refers to team impact
-        if not has_practice and not re.search(r"\b(team|engineer|developers?|code)\b", low):
-            return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"mode": "rule", "reason": "not_se_context"})
-
-        # Confidence scoring (simple + transparent)
-        score = 0.45
-        if has_connector:
-            score += 0.25
-        if has_change:
+        score = 0.55
+        if has_norm:
+            score += 0.20
+        if has_causal:
             score += 0.15
-        if has_practice:
+        if has_comp:
             score += 0.10
+        if has_quant:
+            score += 0.05
+        if has_gen:
+            score += 0.05
+
         if re.search(r"\b(can|may|might)\b", low):
-            score -= 0.05  # weaker modality
+            score -= 0.05
+
         score = max(0.0, min(0.95, score))
 
-        # Labeling (lightweight; you can expand)
         label = "unknown"
         if re.search(r"\b(defect|bugs?|quality)\b", low):
             label = "quality"
-        elif re.search(r"\b(productivity|velocity|throughput|faster|speed)\b", low):
+        elif re.search(r"\b(productivity|faster|speed|velocity|throughput)\b", low):
             label = "productivity"
         elif re.search(r"\b(maintainability|refactor|technical debt)\b", low):
             label = "maintainability"
@@ -153,23 +152,21 @@ class RuleBasedClaimDetector:
             label = "security"
         elif re.search(r"\b(performance)\b", low):
             label = "performance"
-        elif re.search(r"\b(collaboration|communication|morale|happiness|unhappy)\b", low):
+        elif re.search(r"\b(team|communication|collaboration|morale)\b", low):
             label = "team"
 
-        return DetectionResult(True, txt, score, label, {"mode": "rule", "has_connector": has_connector, "has_change": has_change})
+        return DetectionResult(True, txt, score, label, {"mode": "rule"})
 
 
-# ---------------------------
-# AZURE DETECTOR (for later)
-# ---------------------------
+
 class AzureClaimDetector:
     def __init__(self, client):
         self.client = client
 
-    def detect(self, sent: SentenceRecord) -> DetectionResult:
+    def detect(self, sent) -> DetectionResult:
         import json as _json
 
-        user_prompt = USER_PROMPT_TEMPLATE.format(sentence=sent.text)
+        user_prompt = USER_PROMPT_TEMPLATE.format(sentence=getattr(sent, "text", ""))
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
@@ -186,8 +183,7 @@ class AzureClaimDetector:
         confidence = float(data.get("confidence", 0.0))
         label = str(data.get("label", "none"))
 
-        # Enforce verbatim
-        if is_claim and claim != sent.text:
+        if is_claim and claim != getattr(sent, "text", ""):
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"error": "non_verbatim", "model_claim": claim})
 
         if not is_claim or claim == "NO_CLAIM":

@@ -1,109 +1,115 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .candidate_filter import CandidateFilter
-from .citations import extract_citations
+from .citations import decide_citation_status
 from .config import RunConfig
-from .models import SentenceRecord, ClaimRecord
+from .ingest.epub_ingest import ingest_epub_paragraphs
+from .ingest.azw3_ingest import ingest_azw3_paragraphs
+from .ingest.structures import ParagraphBlock
+from .models_rq1 import RQ1ClaimRow
 from .tokenize import SentenceTokenizer
-from .ingest.epub_ingest import ingest_epub
-from .ingest.pdf_ingest import ingest_pdf
 
 
-def ingest_sentences(input_path: str, tokenizer: SentenceTokenizer) -> List[SentenceRecord]:
+@dataclass
+class _SentenceLike:
+    text: str
+
+
+def _ingest_paragraphs(input_path: str, cache_dir: str, logger) -> List[ParagraphBlock]:
     p = Path(input_path)
     suffix = p.suffix.lower()
 
     if suffix == ".epub":
-        return list(ingest_epub(str(p), tokenizer))
-    if suffix == ".pdf":
-        return list(ingest_pdf(str(p), tokenizer))
+        return list(ingest_epub_paragraphs(str(p), logger))
+    if suffix == ".azw3":
+        return list(ingest_azw3_paragraphs(str(p), cache_dir=cache_dir, logger=logger))
 
-    raise ValueError(f"Unsupported file type: {suffix}. Only .epub and .pdf")
-
-
-def build_context(sentences: List[SentenceRecord], idx: int) -> Tuple[str, str, str]:
-    pre = sentences[idx - 1].text if idx - 1 >= 0 else ""
-    claim = sentences[idx].text
-    post = sentences[idx + 1].text if idx + 1 < len(sentences) else ""
-    return pre, claim, post
+    raise ValueError(f"Unsupported file type: {suffix}. Only .epub and .azw3")
 
 
-def extract_claims(
+def extract_claim_rows_for_book(
     input_path: str,
     cfg: RunConfig,
     detector,
     logger,
-) -> Tuple[List[ClaimRecord], Dict[str, Any]]:
+    cache_dir: str,
+) -> Tuple[List[RQ1ClaimRow], Dict[str, Any]]:
     """
-    End-to-end extraction for a single book (PDF/EPUB):
-    - ingest sentences
-    - heuristic candidate filter
-    - detector (offline rule-based OR azure)
-    - always build 3-sentence context
-    - add claim_serial + page/spine fields + citation extraction
+    Book-level pipeline for RQ1 tool output (one row per claim).
+    claim_id is assigned later at corpus level to ensure global uniqueness.
     """
     tok = SentenceTokenizer(language=cfg.language)
-    sentences = ingest_sentences(input_path, tok)
-
     cand_filter = CandidateFilter(cfg)
 
-    claims: List[ClaimRecord] = []
+    paragraphs = _ingest_paragraphs(input_path, cache_dir=cache_dir, logger=logger)
+
+    rows: List[RQ1ClaimRow] = []
     tested = 0
-    claim_serial = 0
 
-    for i, s in enumerate(sentences):
-        if not cand_filter.is_candidate(s):
-            continue
+    for pb in paragraphs:
+        sentences = tok.split(pb.paragraph_text)
 
-        if cfg.max_llm_calls is not None and tested >= cfg.max_llm_calls:
-            logger.warning("Max sentence tests reached; stopping detection.")
-            break
+        if not pb.section_title:
+            logger.warning(f"Missing section title: {pb.source_path} spine={pb.spine_index} para={pb.paragraph_index}")
 
-        res = detector.detect(s)
-        tested += 1
+        for s_i, sent_text in enumerate(sentences):
+            if not cand_filter.is_candidate_text(sent_text):
+                continue
 
-        if not res.is_claim:
-            continue
+            if cfg.max_llm_calls is not None and tested >= cfg.max_llm_calls:
+                logger.warning("Max sentence tests reached; stopping detection.")
+                break
 
-        pre, claim_text, post = build_context(sentences, i)
-        cites = extract_citations(claim_text)
+            tested += 1
+            res = detector.detect(_SentenceLike(sent_text))
+            if not res.is_claim:
+                continue
 
-        claim_serial += 1
-        claims.append(
-            ClaimRecord(
-                claim_serial=claim_serial,
-                book_id=s.book_id,
-                source_path=s.source_path,
-                chapter_id=s.chapter_id,
-                chapter_title=s.chapter_title,
-                paragraph_id=s.paragraph_id,
-                sentence_index=s.sentence_index,
-                global_sentence_index=s.global_sentence_index,
-                page_number=s.page_number,
-                spine_index=s.spine_index,
-                pre_context=pre,
-                claim=claim_text,
-                post_context=post,
-                citations=cites,
-                label=res.label,
-                confidence=res.confidence,
-                detector=("azure" if detector.__class__.__name__.lower().startswith("azure") else "rule"),
-                extra=res.raw,
+            decision = decide_citation_status(
+                paragraph_text=pb.paragraph_text,
+                sentences=sentences,
+                claim_sentence_index=s_i,
             )
-        )
+
+            section = pb.section_title or ""
+            location_text = f"{pb.chapter_title} > {section} > para {pb.paragraph_index}"
+
+            rows.append(
+                RQ1ClaimRow(
+                    claim_id="",  # assigned globally later
+                    book_id=pb.book_id,
+                    book_title=pb.book_title,
+                    chapter_title=pb.chapter_title,
+                    section_title=section,
+                    paragraph_index=pb.paragraph_index,
+                    location_text=location_text,
+                    ebook_locator=pb.ebook_locator,
+                    claim_text=sent_text,
+                    sentence_index=s_i,
+                    citation_status=decision.citation_status,
+                    citation_marker_text=decision.citation_marker_text,
+                    citation_marker_location_text=decision.citation_marker_location_text,
+                    citation_context=decision.citation_context,
+                    confidence=float(getattr(res, "confidence", 0.0) or 0.0),
+                    notes="",
+                    verified="",
+                    verifier="",
+                    verification_notes="",
+                )
+            )
 
     meta = {
         "input": str(Path(input_path).name),
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "language": cfg.language,
-        "cue_phrases": cfg.cue_phrases,
         "max_llm_calls": cfg.max_llm_calls,
-        "total_sentences": len(sentences),
+        "paragraphs_total": len(paragraphs),
         "candidates_tested": tested,
-        "claims_found": len(claims),
+        "claims_found": len(rows),
     }
-    return claims, meta
+    return rows, meta
