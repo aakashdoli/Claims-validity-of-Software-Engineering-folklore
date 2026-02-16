@@ -1,26 +1,21 @@
 {
-  "timestamp_utc": "2026-01-29T00:35:48.792945+00:00",
+  "timestamp_utc": "2026-01-30T17:58:15.565371+00:00",
   "books_count": 1,
-  "books_succeeded": 0,
-  "books_failed": 1,
-  "total_claims": 0,
+  "books_succeeded": 1,
+  "books_failed": 0,
+  "total_claims": 85,
   "citation_breakdown": {
-    "cited_count": 0,
+    "cited_count": 2,
     "ambiguous_count": 0,
-    "not_cited_count": 0,
-    "cited_pct": 0.0,
+    "not_cited_count": 83,
+    "cited_pct": 2.35,
     "ambiguous_pct": 0.0,
-    "not_cited_pct": 0.0
+    "not_cited_pct": 97.65
   },
   "config": {
     "max_llm_calls": null,
     "language": "en",
     "cue_phrases_count": 37
   },
-  "errors": [
-    {
-      "file": "Stanier2021-become-an-effective-software-engineering-manager.azw3",
-      "error": "AZW3 ingest requires calibre 'ebook-convert' on PATH. Install calibre locally and ensure ebook-convert is available."
-    }
-  ]
+  "errors": []
 }

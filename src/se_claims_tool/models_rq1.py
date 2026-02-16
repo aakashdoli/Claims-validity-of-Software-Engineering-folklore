@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
+# Exact column order required by your thesis instrument
 RQ1_CSV_COLUMNS = [
     "claim_id",
     "book_id",

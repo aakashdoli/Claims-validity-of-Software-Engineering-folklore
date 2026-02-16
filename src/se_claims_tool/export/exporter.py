@@ -31,11 +31,12 @@ def write_csv(path: str, rows: List[RQ1ClaimRow]) -> None:
     validate_records(rows)
 
     with p.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=RQ1_CSV_COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=RQ1_CSV_COLUMNS, extrasaction="raise")
         writer.writeheader()
         for r in rows:
             d = asdict(r)
-            writer.writerow(d)
+            row = {k: d.get(k, "") for k in RQ1_CSV_COLUMNS}
+            writer.writerow(row)
 
 
 def write_metadata(path: str, meta: Dict[str, Any]) -> None:

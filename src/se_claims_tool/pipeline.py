@@ -1,35 +1,41 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from .candidate_filter import CandidateFilter
+import pysbd
+
 from .citations import decide_citation_status
 from .config import RunConfig
-from .ingest.epub_ingest import ingest_epub_paragraphs
 from .ingest.azw3_ingest import ingest_azw3_paragraphs
-from .ingest.structures import ParagraphBlock
+from .ingest.epub_ingest import ingest_epub_paragraphs
 from .models_rq1 import RQ1ClaimRow
-from .tokenize import SentenceTokenizer
+from .ingest.common import compute_book_id
 
 
-@dataclass
-class _SentenceLike:
-    text: str
+SUPPORTED = {".epub", ".azw3"}
 
 
-def _ingest_paragraphs(input_path: str, cache_dir: str, logger) -> List[ParagraphBlock]:
-    p = Path(input_path)
-    suffix = p.suffix.lower()
+def _sentence_split(paragraph_text: str) -> List[str]:
+    seg = pysbd.Segmenter(language="en", clean=True)
+    sents = seg.segment(paragraph_text or "")
+    out = []
+    for s in sents:
+        s = (s or "").strip()
+        if s:
+            out.append(s)
+    return out
 
+
+def _pick_ingestor(path: str):
+    suffix = Path(path).suffix.lower()
     if suffix == ".epub":
-        return list(ingest_epub_paragraphs(str(p), logger))
+        return ingest_epub_paragraphs
     if suffix == ".azw3":
-        return list(ingest_azw3_paragraphs(str(p), cache_dir=cache_dir, logger=logger))
-
-    raise ValueError(f"Unsupported file type: {suffix}. Only .epub and .azw3")
+        return ingest_azw3_paragraphs
+    raise ValueError(f"Unsupported input format: {suffix}")
 
 
 def extract_claim_rows_for_book(
@@ -37,79 +43,97 @@ def extract_claim_rows_for_book(
     cfg: RunConfig,
     detector,
     logger,
-    cache_dir: str,
+    cache_dir: str | None = None,
 ) -> Tuple[List[RQ1ClaimRow], Dict[str, Any]]:
-    """
-    Book-level pipeline for RQ1 tool output (one row per claim).
-    claim_id is assigned later at corpus level to ensure global uniqueness.
-    """
-    tok = SentenceTokenizer(language=cfg.language)
-    cand_filter = CandidateFilter(cfg)
+    p = Path(input_path)
+    if p.suffix.lower() not in SUPPORTED:
+        raise ValueError("Only .epub and .azw3 are supported for RQ1")
 
-    paragraphs = _ingest_paragraphs(input_path, cache_dir=cache_dir, logger=logger)
+    ingestor = _pick_ingestor(input_path)
 
     rows: List[RQ1ClaimRow] = []
-    tested = 0
+    paragraphs_total = 0
+    candidates_tested = 0
+    claims_found = 0
 
-    for pb in paragraphs:
-        sentences = tok.split(pb.paragraph_text)
+    book_id = compute_book_id(input_path)
 
-        if not pb.section_title:
-            logger.warning(f"Missing section title: {pb.source_path} spine={pb.spine_index} para={pb.paragraph_index}")
+    for block in ingestor(input_path, logger=logger):
+        paragraphs_total += 1
 
-        for s_i, sent_text in enumerate(sentences):
-            if not cand_filter.is_candidate_text(sent_text):
+        paragraph_text = (block.paragraph_text or "").strip()
+        if not paragraph_text:
+            continue
+
+        sentences = _sentence_split(paragraph_text)
+        if not sentences:
+            continue
+
+        for si, sent_text in enumerate(sentences):
+            candidates_tested += 1
+
+            # HARD GATE: only detector-approved sentences become CSV rows
+            res = detector.detect(type("Sent", (), {"text": sent_text})())
+            if not getattr(res, "is_claim", False):
                 continue
 
-            if cfg.max_llm_calls is not None and tested >= cfg.max_llm_calls:
-                logger.warning("Max sentence tests reached; stopping detection.")
-                break
+            claims_found += 1
 
-            tested += 1
-            res = detector.detect(_SentenceLike(sent_text))
-            if not res.is_claim:
-                continue
-
-            decision = decide_citation_status(
-                paragraph_text=pb.paragraph_text,
+            cite = decide_citation_status(
+                paragraph_text=paragraph_text,
                 sentences=sentences,
-                claim_sentence_index=s_i,
+                claim_sentence_index=si,
             )
 
-            section = pb.section_title or ""
-            location_text = f"{pb.chapter_title} > {section} > para {pb.paragraph_index}"
+            chapter_title = getattr(block, "chapter_title", "") or ""
+            section_title = getattr(block, "section_title", "") or ""
+            para_index = int(getattr(block, "paragraph_index", 0))
+            locator = getattr(block, "ebook_locator", "") or ""
+
+            source_path = getattr(block, "source_path", "") or p.name
+            loc_text = f"{source_path} > {chapter_title} > {section_title} > para {para_index}".strip()
+
+            raw = getattr(res, "raw", {})
+            notes = ""
+            if isinstance(raw, dict) and raw.get("reason"):
+                notes = f"detector_reason={raw.get('reason')}"
+
+            confidence = float(getattr(res, "confidence", 0.6) or 0.6)
 
             rows.append(
                 RQ1ClaimRow(
-                    claim_id="",  # assigned globally later
-                    book_id=pb.book_id,
-                    book_title=pb.book_title,
-                    chapter_title=pb.chapter_title,
-                    section_title=section,
-                    paragraph_index=pb.paragraph_index,
-                    location_text=location_text,
-                    ebook_locator=pb.ebook_locator,
+                    claim_id="",  # assigned later in batch_pipeline
+                    book_id=book_id,
+                    book_title=getattr(block, "book_title", p.stem),
+                    chapter_title=chapter_title,
+                    section_title=section_title,
+                    paragraph_index=para_index,
+                    location_text=loc_text,
+                    ebook_locator=locator,
                     claim_text=sent_text,
-                    sentence_index=s_i,
-                    citation_status=decision.citation_status,
-                    citation_marker_text=decision.citation_marker_text,
-                    citation_marker_location_text=decision.citation_marker_location_text,
-                    citation_context=decision.citation_context,
-                    confidence=float(getattr(res, "confidence", 0.0) or 0.0),
-                    notes="",
+                    sentence_index=int(si),
+                    citation_status=cite.citation_status,
+                    citation_marker_text=cite.citation_marker_text,
+                    citation_marker_location_text=cite.citation_marker_location_text,
+                    citation_context=cite.citation_context,
+                    confidence=confidence,
+                    notes=notes,
                     verified="",
                     verifier="",
                     verification_notes="",
                 )
             )
 
-    meta = {
-        "input": str(Path(input_path).name),
+    meta: Dict[str, Any] = {
+        "input_file": p.name,
+        "book_id": book_id,
+        "paragraphs_total": paragraphs_total,
+        "candidates_tested": candidates_tested,
+        "claims_found": claims_found,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "language": cfg.language,
-        "max_llm_calls": cfg.max_llm_calls,
-        "paragraphs_total": len(paragraphs),
-        "candidates_tested": tested,
-        "claims_found": len(rows),
     }
+
+    logger.info(
+        f"Book done: {p.name} paragraphs={paragraphs_total} candidates={candidates_tested} claims={claims_found}"
+    )
     return rows, meta
