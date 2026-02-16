@@ -1,0 +1,1 @@
+This folder will contain weekly plan and progress logs
