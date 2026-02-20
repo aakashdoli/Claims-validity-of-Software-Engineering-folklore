@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_batch = sub.add_parser(
         "extract-batch",
-        help="Extract RQ1 folklore claim rows from an EPUB/AZW3 corpus (deterministic rule-based detector).",
+        help="Extract RQ1 folklore claim rows from EPUB/AZW3 corpus (deterministic rule-based detector).",
     )
     p_batch.add_argument("--inputs", required=True, help="Folder path, .zip, or single .epub/.azw3")
     p_batch.add_argument("--outdir", required=True, help="Output directory")
@@ -32,8 +32,7 @@ def main() -> int:
     outdir_path = Path(args.outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
 
-    cfg = RunConfig(max_llm_calls=args.max_calls)  # Name kept for backwards compatibility
-
+    cfg = RunConfig(max_llm_calls=args.max_calls)  # keep field name for compatibility
     detector = RuleBasedClaimDetector()
 
     pilot_books = [x.strip() for x in (args.pilot_books or "").split(",") if x.strip()]
