@@ -100,6 +100,12 @@ def extract_claim_rows_for_book(
 
             confidence = float(getattr(res, "confidence", 0.6) or 0.6)
 
+            trigger_rule = ""
+            trigger_terms = ""
+            if isinstance(raw, dict):
+                trigger_rule = raw.get("trigger_rule", "")
+                trigger_terms = raw.get("trigger_terms", "")
+
             rows.append(
                 RQ1ClaimRow(
                     claim_id="",  # assigned later in batch_pipeline
@@ -117,6 +123,8 @@ def extract_claim_rows_for_book(
                     citation_marker_location_text=cite.citation_marker_location_text,
                     citation_context=cite.citation_context,
                     confidence=confidence,
+                    trigger_rule=trigger_rule,
+                    trigger_terms=trigger_terms,
                     notes=notes,
                     verified="",
                     verifier="",

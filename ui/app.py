@@ -1,290 +1,341 @@
 from __future__ import annotations
 
-import hashlib
-import logging
+import os
 import sys
+import subprocess
 from pathlib import Path
-from typing import List, Optional
+from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
-# Ensure project package imports work when running: streamlit run ui/app.py
-REPO_ROOT = Path(__file__).resolve().parents[1]  # .../se-folklore-claims
+# Ensure src/ is importable when running from repo root
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from se_claims_tool.batch_pipeline import run_corpus
-from se_claims_tool.config import RunConfig
-from se_claims_tool.llm.claim_detector import RuleBasedClaimDetector
-
-# Paths
-UPLOAD_DIR = REPO_ROOT / "books_upload"
-DEFAULT_OUTDIR = REPO_ROOT / "out_ui"
-
-
-class _StreamlitLogHandler(logging.Handler):
-    def __init__(self):
-        super().__init__()
-        self.lines: List[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.lines.append(self.format(record))
+# Import your pipeline entrypoint
+try:
+    from se_claims_tool.config import RunConfig
+    from se_claims_tool.logging_utils import setup_logger
+    from se_claims_tool.batch_pipeline import run_corpus
+    from se_claims_tool.llm.claim_detector import RuleBasedClaimDetector
+except Exception as e:
+    run_corpus = None
+    RuleBasedClaimDetector = None
+    RunConfig = None
+    setup_logger = None
+    st.warning(f"Could not import se_claims_tool modules. Import error: {e}")
 
 
-def _setup_logger(level: str = "INFO") -> tuple[logging.Logger, _StreamlitLogHandler]:
-    logger = logging.getLogger("se_claims_tool_ui")
-    logger.setLevel(getattr(logging, (level or "INFO").upper(), logging.INFO))
-    logger.handlers.clear()
-    logger.propagate = False
-
-    handler = _StreamlitLogHandler()
-    handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
-    return logger, handler
-
-
-def _sha256_bytes(data: bytes) -> str:
-    h = hashlib.sha256()
-    h.update(data)
-    return h.hexdigest()
+def run_cmd(cmd: list[str], cwd: Optional[Path] = None) -> tuple[int, str]:
+    """Run a shell command and return (returncode, combined_output)."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "src") + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return proc.returncode, proc.stdout
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _safe_save_upload(uploaded_file, target_dir: Path) -> tuple[Path, bool]:
-    """
-    Saves the uploaded file deterministically.
-
-    Dedup rule:
-    - If another file in target_dir has the same content hash, do not save again.
-      Return the existing path and is_duplicate=True.
-
-    If not duplicate:
-    - Save using original filename.
-    - If name collision exists, append _1, _2, ... deterministically.
-    """
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    data = uploaded_file.getbuffer().tobytes()
-    incoming_hash = _sha256_bytes(data)
-
-    for existing in target_dir.iterdir():
-        if not existing.is_file():
-            continue
-        if existing.suffix.lower() not in [".epub", ".azw3", ".zip"]:
-            continue
-        try:
-            if _sha256_file(existing) == incoming_hash:
-                return existing, True
-        except Exception:
-            continue
-
-    target = target_dir / uploaded_file.name
-    if target.exists():
-        stem = target.stem
-        suffix = target.suffix
-        i = 1
-        while True:
-            candidate = target_dir / f"{stem}_{i}{suffix}"
-            if not candidate.exists():
-                target = candidate
-                break
-            i += 1
-
-    with open(target, "wb") as f:
-        f.write(data)
-
-    return target, False
-
-
-def _list_books(folder: Path) -> List[Path]:
+def list_books(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
-    files: List[Path] = []
-    for ext in ["*.epub", "*.EPUB", "*.azw3", "*.AZW3", "*.zip", "*.ZIP"]:
-        files.extend(folder.rglob(ext))
+    exts = {".epub", ".azw3", ".zip"}
+    files = [p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in exts]
     return sorted(files)
 
 
-def _read_bytes(path: Path) -> Optional[bytes]:
-    if path.exists() and path.is_file():
-        return path.read_bytes()
-    return None
+def safe_mkdir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
 
-st.set_page_config(page_title="SE Folklore Claim Extraction (RQ1)", layout="wide")
-st.title("SE Folklore Claim Extraction Tool (RQ1)")
+st.set_page_config(page_title="SE Folklore Claims Tool", layout="wide")
+st.title("SE Folklore Claims Tool")
+st.caption("Deterministic claim extraction, traceability, and manual validation workflow")
 
-st.write(
-    "Upload EPUB/AZW3 (or a ZIP containing them). The tool extracts one claim per row, "
-    "adds traceability, and assigns conservative citation_status (cited / ambiguous / not_cited)."
-)
-
-UPLOAD_DIR.mkdir(exist_ok=True)
-DEFAULT_OUTDIR.mkdir(exist_ok=True)
 
 with st.sidebar:
-    st.header("Settings")
+    st.header("Paths")
 
+    default_books_dir = REPO_ROOT / "books_upload"
+    default_out_dir = REPO_ROOT / "out"
+
+    books_dir = Path(st.text_input("Books folder", value=str(default_books_dir)))
+    out_dir = Path(st.text_input("Output folder", value=str(default_out_dir)))
+
+    safe_mkdir(out_dir)
+
+    st.divider()
+    st.header("Run settings")
     log_level = st.selectbox("Log level", ["INFO", "DEBUG", "WARNING", "ERROR"], index=0)
+    max_calls = st.number_input("Max detector calls (optional)", min_value=0, value=0, step=1)
+    max_calls_value = None if max_calls == 0 else int(max_calls)
 
-    max_calls = st.number_input(
-        "Max detector calls (optional cap)",
-        min_value=0,
-        value=0,
-        step=100,
-        help="0 means no cap",
-    )
+    st.divider()
+    st.header("Validation settings")
+    sample_n = st.number_input("Sample size", min_value=1, value=50, step=1)
+    sample_seed = st.number_input("Sample seed", min_value=0, value=42, step=1)
 
-    outdir_name = st.text_input("Output folder name", value="out_ui")
-    outdir = REPO_ROOT / outdir_name
 
-    st.caption("AZW3 requires calibre ebook-convert installed locally.")
-    st.caption("No online scraping. Only processes files you upload.")
+tabs = st.tabs(["1) Extract", "2) Validate sample", "3) Score validation", "4) Browse outputs"])
 
-st.header("1) Upload books")
-uploaded = st.file_uploader(
-    "Choose EPUB/AZW3 files (or ZIP)",
-    type=["epub", "azw3", "zip"],
-    accept_multiple_files=True,
-)
 
-if uploaded:
-    saved_paths = []
-    dup_count = 0
-    for f in uploaded:
-        saved_path, is_dup = _safe_save_upload(f, UPLOAD_DIR)
-        saved_paths.append(saved_path)
-        if is_dup:
-            dup_count += 1
+# -------------------------
+# 1) Extract
+# -------------------------
+with tabs[0]:
+    st.subheader("1) Extract claims from a book")
 
-    st.success(f"Processed {len(uploaded)} file(s). Saved new: {len(uploaded) - dup_count}. Duplicates skipped: {dup_count}.")
-    if saved_paths:
-        st.caption("Saved to: books_upload/")
+    uploaded_book = st.file_uploader("Upload a book (.epub or .azw3)", type=["epub", "azw3"])
+    if uploaded_book is not None:
+        dest = books_dir / uploaded_book.name
+        dest.write_bytes(uploaded_book.getvalue())
+        st.success(f"Saved to: {dest}")
 
-books = _list_books(UPLOAD_DIR)
-
-col1, col2 = st.columns([2, 1])
-with col1:
-    st.subheader("Files in upload folder")
-    if books:
-        df_books = pd.DataFrame(
-            [
-                {
-                    "filename": p.name,
-                    "stem": p.stem,
-                    "ext": p.suffix.lower(),
-                    "size_kb": round(p.stat().st_size / 1024, 1),
-                }
-                for p in books
-            ]
-        )
-        st.dataframe(df_books, use_container_width=True, hide_index=True)
-    else:
-        st.info("No EPUB/AZW3/ZIP files found yet in books_upload/.")
-
-with col2:
-    st.subheader("Manage uploads")
-    if st.button("Clear uploaded files", type="secondary", disabled=not bool(books)):
-        for p in books:
-            try:
-                p.unlink()
-            except Exception:
-                pass
+        # Remember uploaded file and rerun so it appears in the dropdown
+        st.session_state["last_uploaded_book"] = dest.name
         st.rerun()
 
-st.header("2) Run extraction")
+    books = list_books(books_dir)
+    if not books:
+        st.error(f"No .epub/.azw3 files found in: {books_dir}")
+        st.stop()
 
-available_stems = [p.stem for p in books if p.suffix.lower() != ".zip"]
-pilot = st.multiselect(
-    "Pilot books (select 2, or leave empty to run all)",
-    options=available_stems,
-    default=available_stems[:2] if len(available_stems) >= 2 else [],
-)
+    options = [p.name for p in books]
 
-run_btn = st.button("Run extraction", type="primary", disabled=not bool(books))
+    # Default to last uploaded if present
+    default_idx = 0
+    last = st.session_state.get("last_uploaded_book")
+    if last and last in options:
+        default_idx = options.index(last)
 
-if run_btn:
-    logger, handler = _setup_logger(log_level)
+    selected = st.selectbox(
+        "Select a book file",
+        options,
+        index=default_idx,
+        key="book_selectbox",   # IMPORTANT: stable unique key
+    )
 
-    cfg = RunConfig(max_llm_calls=None if max_calls == 0 else int(max_calls))
-    detector = RuleBasedClaimDetector()
+    selected_path = books_dir / selected
 
-    outdir.mkdir(parents=True, exist_ok=True)
+    # DEBUG: show exactly what the app thinks
+    st.caption(f"DEBUG selected (dropdown value): {selected}")
+    st.caption(f"DEBUG selected_path: {selected_path}")
 
-    with st.spinner("Running extraction..."):
-        try:
-            summary = run_corpus(
-                inputs=str(UPLOAD_DIR),
-                outdir=str(outdir),
-                cfg=cfg,
-                detector=detector,
-                logger=logger,
-                pilot_books=pilot if pilot else None,
+    st.write(f"Selected file: {selected_path}")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        run_mode = st.radio("Run mode", ["Use Python API (recommended)", "Use CLI (subprocess)"], index=0)
+    with col2:
+        pilot_books_text = st.text_input("Pilot books filter (optional, comma-separated stems)", value="")
+
+    if st.button("Run extraction", type="primary"):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_out_dir = out_dir / f"run_{ts}"
+        safe_mkdir(run_out_dir)
+
+        st.info(f"Outputs will be written to: {run_out_dir}")
+
+        if run_mode.startswith("Use Python API"):
+            if run_corpus is None:
+                st.error("Python API import failed. Switch to CLI mode or fix imports.")
+            else:
+                try:
+                    logger = setup_logger(log_level)
+                    cfg = RunConfig(max_llm_calls=max_calls_value)
+                    detector = RuleBasedClaimDetector()
+
+                    pilot_books = [x.strip() for x in (pilot_books_text or "").split(",") if x.strip()]
+                    run_corpus(
+                        inputs=str(selected_path),
+                        outdir=str(run_out_dir),
+                        cfg=cfg,
+                        detector=detector,
+                        logger=logger,
+                        pilot_books=pilot_books if pilot_books else None,
+                    )
+                    st.success("Extraction completed.")
+                except Exception as e:
+                    st.exception(e)
+        else:
+            cmd = [
+                sys.executable,
+                "-m",
+                "se_claims_tool",
+                "extract-batch",
+                "--inputs",
+                str(selected_path),
+                "--outdir",
+                str(run_out_dir),
+                "--log-level",
+                log_level,
+            ]
+            if max_calls_value is not None:
+                cmd += ["--max-calls", str(max_calls_value)]
+            if pilot_books_text.strip():
+                cmd += ["--pilot-books", pilot_books_text.strip()]
+
+            rc, out = run_cmd(cmd, cwd=REPO_ROOT)
+            st.code(" ".join(cmd))
+            st.text_area("Console output", out, height=260)
+            if rc == 0:
+                st.success("Extraction completed.")
+            else:
+                st.error(f"Extraction failed (exit code {rc}). See console output above.")
+
+        # Quick link to combined CSV if present
+        combined = run_out_dir / "all_claims.csv"
+        if combined.exists():
+            st.success(f"Found: {combined.name}")
+            df = pd.read_csv(combined)
+            st.write("Preview of extracted claims:")
+            st.dataframe(df.head(50), width="stretch")
+        else:
+            st.warning("No all_claims.csv found in this run folder. Check console output and output files.")
+
+
+# -------------------------
+# 2) Validate sample
+# -------------------------
+with tabs[1]:
+    st.subheader("2) Generate a deterministic validation sample")
+
+    # Pick run folder and claims CSV
+    run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
+    if not run_folders:
+        st.info("No run folders found. Run extraction first.")
+    else:
+        run_folder = st.selectbox("Select a run folder", [str(p.name) for p in run_folders])
+        run_path = out_dir / run_folder
+
+        # Prefer all_claims.csv, but allow user to choose
+        csv_files = sorted(run_path.glob("*.csv"))
+        default_csv = run_path / "all_claims.csv"
+        choices = [default_csv] if default_csv.exists() else []
+        choices += [p for p in csv_files if p.name != "all_claims.csv"]
+
+        if not choices:
+            st.error("No CSV files found in this run folder.")
+        else:
+            selected_csv = st.selectbox("Select extracted claims CSV", [str(p.name) for p in choices])
+            input_csv = run_path / selected_csv
+
+            st.write("Input CSV:", str(input_csv))
+
+            out_sample_name = st.text_input(
+                "Output sample filename",
+                value=f"validation_sample_seed{int(sample_seed)}_n{int(sample_n)}.csv",
             )
-            st.success("Extraction completed.")
-        except Exception as e:
-            st.error(f"Run failed: {e}")
-            summary = None
+            out_sample_path = run_path / out_sample_name
 
-    st.subheader("Logs")
-    st.code("\n".join(handler.lines[-400:]) if handler.lines else "No logs captured.")
+            if st.button("Generate validation sample", type="primary"):
+                cmd = [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts" / "validate_sample.py"),
+                    "--input",
+                    str(input_csv),
+                    "--out",
+                    str(out_sample_path),
+                    "--n",
+                    str(int(sample_n)),
+                    "--seed",
+                    str(int(sample_seed)),
+                ]
+                rc, out = run_cmd(cmd, cwd=REPO_ROOT)
+                st.code(" ".join(cmd))
+                st.text_area("Console output", out, height=200)
+                if rc == 0 and out_sample_path.exists():
+                    st.success(f"Sample created: {out_sample_path.name}")
+                    df = pd.read_csv(out_sample_path)
+                    st.dataframe(df.head(50), width="stretch")
+                else:
+                    st.error("Sample generation failed. See output above.")
 
-    if summary:
-        st.subheader("Run summary")
-        st.json(summary)
 
-        combined_csv = outdir / "all_claims.csv"
-        per_book_csv = outdir / "per_book_summary.csv"
-        results_zip = outdir / "results.zip"
+# -------------------------
+# 3) Score validation
+# -------------------------
+with tabs[2]:
+    st.subheader("3) Score a filled validation sample and generate a report")
 
-        st.subheader("Downloads")
-        dcol1, dcol2, dcol3 = st.columns(3)
+    run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
+    if not run_folders:
+        st.info("No run folders found. Run extraction first.")
+    else:
+        run_folder = st.selectbox("Select a run folder for scoring", [str(p.name) for p in run_folders], key="score_run_folder")
+        run_path = out_dir / run_folder
 
-        with dcol1:
-            st.write("Combined claims CSV")
-            data = _read_bytes(combined_csv)
-            if data:
-                st.download_button("Download all_claims.csv", data=data, file_name="all_claims.csv", mime="text/csv")
+        # Let user upload a filled CSV
+        uploaded = st.file_uploader("Upload filled validation sample CSV", type=["csv"])
+        if uploaded is not None:
+            filled_path = run_path / "validation_sample_filled_uploaded.csv"
+            filled_path.write_bytes(uploaded.getvalue())
+            st.success(f"Uploaded to: {filled_path.name}")
+
+            report_name = st.text_input("Report filename", value="validation_report.md")
+            report_path = run_path / report_name
+
+            if st.button("Score and generate report", type="primary"):
+                cmd = [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts" / "score_validation.py"),
+                    "--input",
+                    str(filled_path),
+                    "--out_md",
+                    str(report_path),
+                ]
+                rc, out = run_cmd(cmd, cwd=REPO_ROOT)
+                st.code(" ".join(cmd))
+                st.text_area("Console output", out, height=200)
+
+                if rc == 0 and report_path.exists():
+                    st.success(f"Report created: {report_path.name}")
+                    st.markdown(report_path.read_text(encoding="utf-8"))
+                else:
+                    st.error("Scoring failed. See output above.")
+
+
+# -------------------------
+# 4) Browse outputs
+# -------------------------
+with tabs[3]:
+    st.subheader("4) Browse outputs")
+
+    run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
+    if not run_folders:
+        st.info("No run folders found yet.")
+    else:
+        run_folder = st.selectbox("Select a run folder to browse", [str(p.name) for p in run_folders], key="browse_run_folder")
+        run_path = out_dir / run_folder
+        st.write("Folder:", str(run_path))
+
+        files = sorted([p for p in run_path.iterdir() if p.is_file()])
+        if not files:
+            st.info("No files in this run folder.")
+        else:
+            chosen = st.selectbox("Select a file", [p.name for p in files])
+            fpath = run_path / chosen
+
+            if fpath.suffix.lower() == ".csv":
+                df = pd.read_csv(fpath)
+                st.dataframe(df, width="stretch")
+            elif fpath.suffix.lower() in {".md", ".txt", ".log"}:
+                st.markdown(f"### {fpath.name}")
+                st.text_area("Content", fpath.read_text(encoding="utf-8", errors="ignore"), height=450)
             else:
-                st.info("Not found.")
+                st.info("File preview not supported. You can download it below.")
 
-        with dcol2:
-            st.write("Per-book summary CSV")
-            data = _read_bytes(per_book_csv)
-            if data:
-                st.download_button(
-                    "Download per_book_summary.csv",
-                    data=data,
-                    file_name="per_book_summary.csv",
-                    mime="text/csv",
-                )
-            else:
-                st.info("Not found.")
-
-        with dcol3:
-            st.write("Zipped results")
-            data = _read_bytes(results_zip)
-            if data:
-                st.download_button("Download results.zip", data=data, file_name="results.zip", mime="application/zip")
-            else:
-                st.info("Not found.")
-
-        st.subheader("Preview (first 50 rows)")
-        if combined_csv.exists():
-            try:
-                df = pd.read_csv(combined_csv)
-                st.dataframe(df.head(50), use_container_width=True)
-            except Exception as e:
-                st.warning(f"Could not preview CSV: {e}")
-
-st.divider()
-st.caption("Run command: streamlit run ui/app.py")
+            st.download_button(
+                label="Download file",
+                data=fpath.read_bytes(),
+                file_name=fpath.name,
+            )

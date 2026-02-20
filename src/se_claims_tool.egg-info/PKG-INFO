@@ -16,54 +16,50 @@ Requires-Dist: streamlit
 # se-claims-tool
 
 Extract **verbatim** causal claims (sentence-level) from software engineering books (EPUB first-class, PDF fallback),
-and export results to **JSONL + CSV**, with an evaluation mode for **Manual vs AI** precision/recall.
+and export results to **JSONL + CSV** using a deterministic, rule-based claim detector.
 
 ## Install
 
 ```bash
 python -m venv .venv
-# Windows: .venv\\Scripts\\activate
+# Windows: .venv\Scripts\activate
 source .venv/bin/activate
 
 pip install -U pip
 pip install -e .
 ```
 
-## Azure OpenAI setup (optional)
-
-Copy `.env.example` to `.env` and set:
-
-- `AZURE_OPENAI_ENDPOINT`
-- `AZURE_OPENAI_API_KEY`
-- `AZURE_OPENAI_API_VERSION`
-- `AZURE_OPENAI_DEPLOYMENT`
-
 ## Extract from a single book
 
 ```bash
-se-claims-tool extract --input path/to/book.epub --outdir out/book1 --mock-llm
-# or use Azure:
-se-claims-tool extract --input path/to/book.epub --outdir out/book1
+python scripts/run_pipeline.py extract-batch --inputs path/to/book.epub --outdir out/book1
 ```
 
 ## Extract from a folder / ZIP (12-book corpus)
 
 ```bash
-se-claims-tool extract-batch --inputs path/to/big12_folder --outdir out/big12 --mock-llm
-# or use Azure:
-se-claims-tool extract-batch --inputs path/to/big12_folder --outdir out/big12
+python scripts/run_pipeline.py extract-batch --inputs path/to/big12_folder --outdir out/big12
 ```
 
 Outputs include:
 - per-book: `<outdir>/<filename>/claims.jsonl`, `claims.csv`, `run_metadata.json`
 - corpus: `<outdir>/all_claims.jsonl`, `<outdir>/all_claims.csv`, `<outdir>/manifest.csv`, `<outdir>/run_summary.json`, `<outdir>/results.zip`
 
-## Evaluate (Manual vs AI)
+## Validation (manual verification sampling)
+
+1) Create a deterministic sample
 
 ```bash
-se-claims-tool eval --ai-claims out/big12/all_claims.csv --human path/to/human.csv --outdir out/eval
+python scripts/validate_sample.py --input out/<book>_claims.csv --out out/<book>_validation_sample.csv --n 50 --seed 42
 ```
 
-Produces:
-- `eval_metrics.json` (TP/FP/FN, precision/recall)
-- `eval_per_human_claim.csv` (each human claim marked MATCH or MISS)
+2) Two coders fill Yes/No in these columns:
+- is_claim_manual_aakash, is_claim_manual_ekshith
+- locator_correct_manual_aakash, locator_correct_manual_ekshith
+- citation_status_correct_manual_aakash, citation_status_correct_manual_ekshith
+
+3) Score and generate a report
+
+```bash
+python scripts/score_validation.py --input out/<book>_validation_sample_filled.csv --out_md out/<book>_validation_report.md
+```

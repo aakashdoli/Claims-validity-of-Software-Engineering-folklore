@@ -19,6 +19,8 @@ RQ1_CSV_COLUMNS = [
     "citation_marker_location_text",
     "citation_context",
     "confidence",
+    "trigger_rule",
+    "trigger_terms",
     "notes",
     "verified",
     "verifier",
@@ -43,6 +45,8 @@ class RQ1ClaimRow:
     citation_marker_location_text: str
     citation_context: str
     confidence: float
+    trigger_rule: str = ""
+    trigger_terms: str = ""
     notes: str = ""
     verified: str = ""
     verifier: str = ""

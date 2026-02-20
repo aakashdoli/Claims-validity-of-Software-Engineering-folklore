@@ -48,11 +48,11 @@ class RuleBasedClaimDetector:
         if not self._SE_CONTEXT.search(txt):
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"reason": "no_se_context"})
 
-        has_norm = bool(self._NORMATIVE.search(txt))
-        has_causal = bool(self._CAUSAL.search(txt))
-        has_comp = bool(self._COMPARATIVE.search(txt))
-        has_quant = bool(self._QUANT.search(txt))
-        has_gen = bool(self._GENERALIZATION.search(txt))
+        has_norm = self._NORMATIVE.search(txt)
+        has_causal = self._CAUSAL.search(txt)
+        has_comp = self._COMPARATIVE.search(txt)
+        has_quant = self._QUANT.search(txt)
+        has_gen = self._GENERALIZATION.search(txt)
 
         if not (has_norm or has_causal or has_comp or has_quant or has_gen):
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"reason": "no_claim_signal"})
@@ -61,17 +61,35 @@ class RuleBasedClaimDetector:
         if self._FIRST_PERSON.search(txt) and not (has_gen or has_norm):
             return DetectionResult(False, "NO_CLAIM", 0.0, "none", {"reason": "first_person_narrative"})
 
+        rules_fired = []
+        terms = []
         score = 0.60
+
         if has_norm:
+            rules_fired.append("NORMATIVE")
+            terms.append(has_norm.group(0))
             score += 0.20
         if has_causal:
+            rules_fired.append("CAUSAL")
+            terms.append(has_causal.group(0))
             score += 0.15
         if has_comp:
+            rules_fired.append("COMPARATIVE")
+            terms.append(has_comp.group(0))
             score += 0.10
         if has_quant:
+            rules_fired.append("QUANTITATIVE")
+            terms.append(has_quant.group(0))
             score += 0.05
         if has_gen:
+            rules_fired.append("GENERALIZATION")
+            terms.append(has_gen.group(0))
             score += 0.05
 
         score = max(0.0, min(0.95, score))
-        return DetectionResult(True, txt, float(score), "unknown", {"mode": "rule"})
+        raw_res = {
+            "mode": "rule",
+            "trigger_rule": "|".join(rules_fired),
+            "trigger_terms": "|".join(terms)
+        }
+        return DetectionResult(True, txt, float(score), "unknown", raw_res)
