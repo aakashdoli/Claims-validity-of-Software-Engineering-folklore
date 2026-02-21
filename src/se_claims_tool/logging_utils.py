@@ -4,19 +4,32 @@ import logging
 import sys
 
 
-def setup_logger(level: str = "INFO") -> logging.Logger:
+class BufferHandler(logging.Handler):
+    def __init__(self, level=logging.INFO):
+        super().__init__(level)
+        self.lines = []
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.lines.append(msg)
+
+
+def setup_logger(level: str = "INFO"):
     logger = logging.getLogger("se_claims_tool")
-    if logger.handlers:
-        # Avoid duplicate handlers in repeated runs
-        return logger
+    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    logger.setLevel(getattr(logging, (level or "INFO").upper(), logging.INFO))
+    # Clear old handlers to avoid duplicates on Streamlit reruns
+    logger.handlers = []
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logger.level)
+    stream = logging.StreamHandler(sys.stdout)
+    stream.setLevel(logger.level)
     fmt = logging.Formatter("[%(levelname)s] %(message)s")
-    handler.setFormatter(fmt)
+    stream.setFormatter(fmt)
+    logger.addHandler(stream)
 
-    logger.addHandler(handler)
+    buffer = BufferHandler(level=logger.level)
+    buffer.setFormatter(fmt)
+    logger.addHandler(buffer)
+
     logger.propagate = False
-    return logger
+    return logger, buffer

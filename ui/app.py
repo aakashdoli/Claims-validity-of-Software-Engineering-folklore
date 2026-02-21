@@ -33,7 +33,9 @@ except Exception as e:
 def run_cmd(cmd: list[str], cwd: Optional[Path] = None) -> tuple[int, str]:
     """Run a shell command and return (returncode, combined_output)."""
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src") + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["PYTHONPATH"] = str(REPO_ROOT / "src") + (
+        os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""
+    )
     proc = subprocess.run(
         cmd,
         cwd=str(cwd) if cwd else None,
@@ -59,7 +61,9 @@ def safe_mkdir(p: Path) -> None:
 
 st.set_page_config(page_title="SE Folklore Claims Tool", layout="wide")
 st.title("SE Folklore Claims Tool")
-st.caption("Deterministic claim extraction, traceability, and manual validation workflow")
+st.caption(
+    "Deterministic claim extraction, traceability, and manual validation workflow"
+)
 
 
 with st.sidebar:
@@ -75,8 +79,12 @@ with st.sidebar:
 
     st.divider()
     st.header("Run settings")
-    log_level = st.selectbox("Log level", ["INFO", "DEBUG", "WARNING", "ERROR"], index=0)
-    max_calls = st.number_input("Max detector calls (optional)", min_value=0, value=0, step=1)
+    log_level = st.selectbox(
+        "Log level", ["INFO", "DEBUG", "WARNING", "ERROR"], index=0
+    )
+    max_calls = st.number_input(
+        "Max detector calls (optional)", min_value=0, value=0, step=1
+    )
     max_calls_value = None if max_calls == 0 else int(max_calls)
 
     st.divider()
@@ -85,7 +93,9 @@ with st.sidebar:
     sample_seed = st.number_input("Sample seed", min_value=0, value=42, step=1)
 
 
-tabs = st.tabs(["1) Extract", "2) Validate sample", "3) Score validation", "4) Browse outputs"])
+tabs = st.tabs(
+    ["1) Extract", "2) Validate sample", "3) Score validation", "4) Browse outputs"]
+)
 
 
 # -------------------------
@@ -94,7 +104,9 @@ tabs = st.tabs(["1) Extract", "2) Validate sample", "3) Score validation", "4) B
 with tabs[0]:
     st.subheader("1) Extract claims from a book")
 
-    uploaded_book = st.file_uploader("Upload a book (.epub or .azw3)", type=["epub", "azw3"])
+    uploaded_book = st.file_uploader(
+        "Upload a book (.epub or .azw3)", type=["epub", "azw3"]
+    )
     if uploaded_book is not None:
         dest = books_dir / uploaded_book.name
         dest.write_bytes(uploaded_book.getvalue())
@@ -109,34 +121,46 @@ with tabs[0]:
         st.error(f"No .epub/.azw3 files found in: {books_dir}")
         st.stop()
 
-    options = [p.name for p in books]
+    book_names = [p.name for p in books if p.suffix.lower() != ".zip"]
+    book_map = {p.name: p for p in books}
 
-    # Default to last uploaded if present
-    default_idx = 0
-    last = st.session_state.get("last_uploaded_book")
-    if last and last in options:
-        default_idx = options.index(last)
-
-    selected = st.selectbox(
-        "Select a book file",
-        options,
-        index=default_idx,
-        key="book_selectbox",   # IMPORTANT: stable unique key
+    run_scope = st.radio(
+        "What do you want to run?",
+        [
+            "Run one selected book",
+            "Run multiple selected books",
+            "Run all uploaded books",
+        ],
+        index=0,
     )
 
-    selected_path = books_dir / selected
+    selected_path = None
+    selected_multi = []
 
-    # DEBUG: show exactly what the app thinks
-    st.caption(f"DEBUG selected (dropdown value): {selected}")
-    st.caption(f"DEBUG selected_path: {selected_path}")
+    if run_scope == "Run one selected book":
+        default_idx = 0
+        last = st.session_state.get("last_uploaded_book")
+        if last and last in book_names:
+            default_idx = book_names.index(last)
 
-    st.write(f"Selected file: {selected_path}")
+        selected = st.selectbox(
+            "Select a book file",
+            book_names,
+            index=default_idx,
+            key="book_selectbox",
+        )
+        selected_path = books_dir / selected
+        st.caption(f"DEBUG selected_path: {selected_path}")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        run_mode = st.radio("Run mode", ["Use Python API (recommended)", "Use CLI (subprocess)"], index=0)
-    with col2:
-        pilot_books_text = st.text_input("Pilot books filter (optional, comma-separated stems)", value="")
+    elif run_scope == "Run multiple selected books":
+        stems = [p.stem for p in books if p.suffix.lower() != ".zip"]
+        selected_multi = st.multiselect(
+            "Select books (by stem)", options=stems, default=[]
+        )
+
+    run_mode = st.radio(
+        "Run mode", ["Use Python API (recommended)", "Use CLI (subprocess)"], index=0
+    )
 
     if st.button("Run extraction", type="primary"):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -150,30 +174,82 @@ with tabs[0]:
                 st.error("Python API import failed. Switch to CLI mode or fix imports.")
             else:
                 try:
-                    logger = setup_logger(log_level)
+                    logger, handler = setup_logger(
+                        log_level
+                    )  # capture logs into Streamlit
                     cfg = RunConfig(max_llm_calls=max_calls_value)
                     detector = RuleBasedClaimDetector()
 
-                    pilot_books = [x.strip() for x in (pilot_books_text or "").split(",") if x.strip()]
-                    run_corpus(
-                        inputs=str(selected_path),
-                        outdir=str(run_out_dir),
-                        cfg=cfg,
-                        detector=detector,
-                        logger=logger,
-                        pilot_books=pilot_books if pilot_books else None,
+                    if run_scope == "Run one selected book":
+                        summary = run_corpus(
+                            inputs=str(selected_path),
+                            outdir=str(run_out_dir),
+                            cfg=cfg,
+                            detector=detector,
+                            logger=logger,
+                            pilot_books=None,
+                        )
+                    elif run_scope == "Run multiple selected books":
+                        summary = run_corpus(
+                            inputs=str(books_dir),
+                            outdir=str(run_out_dir),
+                            cfg=cfg,
+                            detector=detector,
+                            logger=logger,
+                            pilot_books=selected_multi if selected_multi else None,
+                        )
+                    else:
+                        summary = run_corpus(
+                            inputs=str(books_dir),
+                            outdir=str(run_out_dir),
+                            cfg=cfg,
+                            detector=detector,
+                            logger=logger,
+                            pilot_books=None,
+                        )
+
+                    st.success(f"Extraction completed. Outputs: {run_out_dir}")
+                    st.subheader("Logs")
+                    st.code(
+                        "\n".join(handler.lines[-400:])
+                        if handler.lines
+                        else "No logs captured."
                     )
-                    st.success("Extraction completed.")
+
+                    combined_csv = run_out_dir / "all_claims.csv"
+                    if combined_csv.exists():
+                        df = pd.read_csv(combined_csv)
+                        st.subheader("Preview (first 50 rows)")
+                        st.dataframe(df.head(50), width="stretch")
+                    else:
+                        st.error(
+                            "Run finished but all_claims.csv was not created. Check logs above."
+                        )
+
+                    st.subheader("Run summary")
+                    st.json(summary if summary else {"summary": "None returned"})
+
                 except Exception as e:
+                    st.error("Python API extraction failed.")
                     st.exception(e)
         else:
+            if run_scope == "Run one selected book":
+                target_inputs = str(selected_path)
+                target_pilots = ""
+            elif run_scope == "Run multiple selected books":
+                target_inputs = str(books_dir)
+                target_pilots = ",".join(selected_multi)
+            else:
+                target_inputs = str(books_dir)
+                target_pilots = ""
+
             cmd = [
                 sys.executable,
                 "-m",
                 "se_claims_tool",
                 "extract-batch",
                 "--inputs",
-                str(selected_path),
+                target_inputs,
                 "--outdir",
                 str(run_out_dir),
                 "--log-level",
@@ -181,8 +257,8 @@ with tabs[0]:
             ]
             if max_calls_value is not None:
                 cmd += ["--max-calls", str(max_calls_value)]
-            if pilot_books_text.strip():
-                cmd += ["--pilot-books", pilot_books_text.strip()]
+            if target_pilots.strip():
+                cmd += ["--pilot-books", target_pilots.strip()]
 
             rc, out = run_cmd(cmd, cwd=REPO_ROOT)
             st.code(" ".join(cmd))
@@ -190,7 +266,9 @@ with tabs[0]:
             if rc == 0:
                 st.success("Extraction completed.")
             else:
-                st.error(f"Extraction failed (exit code {rc}). See console output above.")
+                st.error(
+                    f"Extraction failed (exit code {rc}). See console output above."
+                )
 
         # Quick link to combined CSV if present
         combined = run_out_dir / "all_claims.csv"
@@ -200,7 +278,9 @@ with tabs[0]:
             st.write("Preview of extracted claims:")
             st.dataframe(df.head(50), width="stretch")
         else:
-            st.warning("No all_claims.csv found in this run folder. Check console output and output files.")
+            st.warning(
+                "No all_claims.csv found in this run folder. Check console output and output files."
+            )
 
 
 # -------------------------
@@ -214,7 +294,9 @@ with tabs[1]:
     if not run_folders:
         st.info("No run folders found. Run extraction first.")
     else:
-        run_folder = st.selectbox("Select a run folder", [str(p.name) for p in run_folders])
+        run_folder = st.selectbox(
+            "Select a run folder", [str(p.name) for p in run_folders]
+        )
         run_path = out_dir / run_folder
 
         # Prefer all_claims.csv, but allow user to choose
@@ -226,7 +308,9 @@ with tabs[1]:
         if not choices:
             st.error("No CSV files found in this run folder.")
         else:
-            selected_csv = st.selectbox("Select extracted claims CSV", [str(p.name) for p in choices])
+            selected_csv = st.selectbox(
+                "Select extracted claims CSV", [str(p.name) for p in choices]
+            )
             input_csv = run_path / selected_csv
 
             st.write("Input CSV:", str(input_csv))
@@ -271,7 +355,11 @@ with tabs[2]:
     if not run_folders:
         st.info("No run folders found. Run extraction first.")
     else:
-        run_folder = st.selectbox("Select a run folder for scoring", [str(p.name) for p in run_folders], key="score_run_folder")
+        run_folder = st.selectbox(
+            "Select a run folder for scoring",
+            [str(p.name) for p in run_folders],
+            key="score_run_folder",
+        )
         run_path = out_dir / run_folder
 
         # Let user upload a filled CSV
@@ -314,7 +402,11 @@ with tabs[3]:
     if not run_folders:
         st.info("No run folders found yet.")
     else:
-        run_folder = st.selectbox("Select a run folder to browse", [str(p.name) for p in run_folders], key="browse_run_folder")
+        run_folder = st.selectbox(
+            "Select a run folder to browse",
+            [str(p.name) for p in run_folders],
+            key="browse_run_folder",
+        )
         run_path = out_dir / run_folder
         st.write("Folder:", str(run_path))
 
@@ -330,7 +422,11 @@ with tabs[3]:
                 st.dataframe(df, width="stretch")
             elif fpath.suffix.lower() in {".md", ".txt", ".log"}:
                 st.markdown(f"### {fpath.name}")
-                st.text_area("Content", fpath.read_text(encoding="utf-8", errors="ignore"), height=450)
+                st.text_area(
+                    "Content",
+                    fpath.read_text(encoding="utf-8", errors="ignore"),
+                    height=450,
+                )
             else:
                 st.info("File preview not supported. You can download it below.")
 
