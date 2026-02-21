@@ -1,7 +1,7 @@
 .env
 
 # Do not commit books
+books_upload/
 *.epub
 *.azw3
 *.mobi
-books_upload/
