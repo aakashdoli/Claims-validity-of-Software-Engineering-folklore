@@ -22,6 +22,13 @@ RQ1_CSV_COLUMNS = [
     "trigger_rule",
     "trigger_terms",
     "notes",
+    "api_is_claim",
+    "api_is_author_perspective",
+    "api_claim_type",
+    "api_confidence",
+    "api_reason",
+    "api_model",
+    "api_run_id",
     "verified",
     "verifier",
     "verification_notes",
@@ -48,6 +55,13 @@ class RQ1ClaimRow:
     trigger_rule: str = ""
     trigger_terms: str = ""
     notes: str = ""
+    api_is_claim: str = ""
+    api_is_author_perspective: str = ""
+    api_claim_type: str = ""
+    api_confidence: str = ""
+    api_reason: str = ""
+    api_model: str = ""
+    api_run_id: str = ""
     verified: str = ""
     verifier: str = ""
     verification_notes: str = ""

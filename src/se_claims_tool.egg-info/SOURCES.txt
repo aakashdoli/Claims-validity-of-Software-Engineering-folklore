@@ -32,6 +32,7 @@ src/se_claims_tool/ingest/structures.py
 src/se_claims_tool/llm/__init__.py
 src/se_claims_tool/llm/azure_client.py
 src/se_claims_tool/llm/claim_detector.py
+src/se_claims_tool/llm/claim_labeler.py
 src/se_claims_tool/llm/prompt_templates.py
 tests/test_ingest_epub.py
 tests/test_ingest_pdf.py

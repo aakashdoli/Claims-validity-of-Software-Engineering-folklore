@@ -12,6 +12,8 @@ Requires-Dist: pandas
 Requires-Dist: openpyxl
 Requires-Dist: openai
 Requires-Dist: streamlit
+Requires-Dist: python-dotenv
+Requires-Dist: requests
 
 # se-claims-tool
 

@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-02-21T19:11:24.942179+00:00",
+  "books_count": 1,
+  "books_succeeded": 1,
+  "books_failed": 0,
+  "total_claims": 85,
+  "citation_breakdown": {
+    "cited_count": 2,
+    "ambiguous_count": 0,
+    "not_cited_count": 83,
+    "cited_pct": 2.35,
+    "ambiguous_pct": 0.0,
+    "not_cited_pct": 97.65
+  },
+  "config": {
+    "max_llm_calls": null,
+    "language": "en",
+    "cue_phrases_count": 37
+  },
+  "errors": []
+}

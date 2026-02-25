@@ -16,7 +16,9 @@ dependencies = [
   "pandas",
   "openpyxl",
   "openai",
-  "streamlit"
+  "streamlit",
+  "python-dotenv",
+  "requests"
 ]
 
 [project.scripts]

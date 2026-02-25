@@ -6,3 +6,5 @@ pandas
 openpyxl
 openai
 streamlit
+python-dotenv
+requests

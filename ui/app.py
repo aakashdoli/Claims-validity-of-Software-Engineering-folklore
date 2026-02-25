@@ -12,6 +12,11 @@ import streamlit as st
 
 # Ensure src/ is importable when running from repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+from dotenv import load_dotenv
+
+load_dotenv(REPO_ROOT / ".env")
+
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -69,12 +74,13 @@ st.caption(
 with st.sidebar:
     st.header("Paths")
 
-    default_books_dir = REPO_ROOT / "books_upload"
+    default_books_dir = Path.home() / "se-books"
     default_out_dir = REPO_ROOT / "out"
 
     books_dir = Path(st.text_input("Books folder", value=str(default_books_dir)))
     out_dir = Path(st.text_input("Output folder", value=str(default_out_dir)))
 
+    safe_mkdir(books_dir)
     safe_mkdir(out_dir)
 
     st.divider()
@@ -94,7 +100,13 @@ with st.sidebar:
 
 
 tabs = st.tabs(
-    ["1) Extract", "2) Validate sample", "3) Score validation", "4) Browse outputs"]
+    [
+        "1) Extract",
+        "2) Label with API",
+        "3) Validate sample",
+        "4) Score validation",
+        "5) Browse outputs",
+    ]
 )
 
 
@@ -108,9 +120,11 @@ with tabs[0]:
         "Upload a book (.epub or .azw3)", type=["epub", "azw3"]
     )
     if uploaded_book is not None:
+        books_dir.mkdir(parents=True, exist_ok=True)
         dest = books_dir / uploaded_book.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(uploaded_book.getvalue())
-        st.success(f"Saved to: {dest}")
+        st.success(f"Saved uploaded book to: {dest}")
 
         # Remember uploaded file and rerun so it appears in the dropdown
         st.session_state["last_uploaded_book"] = dest.name
@@ -121,8 +135,9 @@ with tabs[0]:
         st.error(f"No .epub/.azw3 files found in: {books_dir}")
         st.stop()
 
-    book_names = [p.name for p in books if p.suffix.lower() != ".zip"]
-    book_map = {p.name: p for p in books}
+    book_files = [p for p in books if p.suffix.lower() != ".zip"]
+    book_names = [p.name for p in book_files]
+    book_map = {p.name: p for p in book_files}
 
     run_scope = st.radio(
         "What do you want to run?",
@@ -149,7 +164,7 @@ with tabs[0]:
             index=default_idx,
             key="book_selectbox",
         )
-        selected_path = books_dir / selected
+        selected_path = book_map[selected]
         st.caption(f"DEBUG selected_path: {selected_path}")
 
     elif run_scope == "Run multiple selected books":
@@ -284,9 +299,140 @@ with tabs[0]:
 
 
 # -------------------------
-# 2) Validate sample
+# -------------------------
+# 2) Label with API
 # -------------------------
 with tabs[1]:
+    st.header("Label claims with API (BTH Azure)")
+    st.write(
+        "This reads all_claims.csv from a run folder and writes all_claims_labeled.csv."
+    )
+
+    run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
+    if not run_folders:
+        st.info("No run folders found. Run extraction first.")
+        st.stop()
+
+    run_folder = st.selectbox(
+        "Select a run folder to label",
+        [p.name for p in run_folders],
+        key="label_run_folder",
+    )
+    run_path = out_dir / run_folder
+
+    input_csv = run_path / "all_claims.csv"
+    if not input_csv.exists():
+        st.error(f"Missing all_claims.csv in {run_path}")
+        st.stop()
+
+    st.write("Input:", str(input_csv))
+
+    batch_size = st.number_input(
+        "Batch size", min_value=5, max_value=50, value=20, step=5
+    )
+    min_conf = st.slider("Min confidence for strict keep", 0.0, 1.0, 0.7, 0.05)
+
+    out_csv = run_path / "all_claims_labeled.csv"
+    meta_json = run_path / "openai_label_metadata.json"
+
+    if st.button("Extract real claims (API)", type="primary"):
+        import time
+        import json
+        import pandas as pd
+        from se_claims_tool.llm.azure_client import AzureChatClient
+        from se_claims_tool.llm.claim_labeler import label_claims_with_azure
+
+        df = pd.read_csv(input_csv)
+        df = df.fillna("")
+
+        if "claim_id" not in df.columns or "claim_text" not in df.columns:
+            st.error("all_claims.csv must contain claim_id and claim_text columns.")
+            st.stop()
+
+        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
+        api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
+        api_version = os.getenv(
+            "AZURE_OPENAI_API_VERSION", "2024-02-15-preview"
+        ).strip()
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini").strip()
+
+        missing = []
+        if not endpoint:
+            missing.append("AZURE_OPENAI_ENDPOINT")
+        if not api_key:
+            missing.append("AZURE_OPENAI_API_KEY")
+        if not deployment:
+            missing.append("AZURE_OPENAI_DEPLOYMENT")
+        if missing:
+            st.error(f"Missing .env values: {missing}")
+            st.stop()
+
+        client = AzureChatClient()
+
+        rows = df.to_dict(orient="records")
+
+        with st.spinner("Labelling rows using API"):
+            labels, meta = label_claims_with_azure(
+                azure_client=client,
+                rows=rows,
+                model_name=deployment,
+                batch_size=int(batch_size),
+            )
+
+        by_id = {x.claim_id: x for x in labels}
+
+        df["api_is_claim"] = False
+        df["api_is_author_perspective"] = False
+        df["api_claim_type"] = ""
+        df["api_confidence"] = 0.0
+        df["api_reason"] = ""
+        df["api_model"] = deployment
+        df["api_run_id"] = time.strftime("%Y-%m-%dT%H-%M-%S")
+
+        for i, r in df.iterrows():
+            cid = str(r["claim_id"])
+            lab = by_id.get(cid)
+            if not lab:
+                continue
+            df.at[i, "api_is_claim"] = bool(lab.is_claim)
+            df.at[i, "api_is_author_perspective"] = bool(lab.is_author_perspective)
+            df.at[i, "api_claim_type"] = lab.claim_type
+            df.at[i, "api_confidence"] = float(lab.confidence)
+            df.at[i, "api_reason"] = lab.reason
+
+        df["api_keep_strict"] = (
+            (df["api_is_claim"] == True)
+            & (df["api_is_author_perspective"] == False)
+            & (df["api_confidence"] >= float(min_conf))
+        )
+
+        df.to_csv(out_csv, index=False)
+
+        meta_out = {
+            **(meta or {}),
+            "endpoint": endpoint,
+            "deployment": deployment,
+            "api_version": api_version,
+            "input_csv": str(input_csv),
+            "output_csv": str(out_csv),
+            "min_confidence": float(min_conf),
+            "total_rows": int(len(df)),
+            "strict_kept_rows": int(df["api_keep_strict"].sum()),
+        }
+        meta_json.write_text(
+            json.dumps(meta_out, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        st.success(
+            f"Wrote {out_csv.name}. Strict kept {int(df['api_keep_strict'].sum())} / {len(df)} rows."
+        )
+        st.dataframe(df[df["api_keep_strict"] == True].head(200), width="stretch")
+
+
+# -------------------------
+# 3) Validate sample
+# -------------------------
+with tabs[2]:
     st.subheader("2) Generate a deterministic validation sample")
 
     # Pick run folder and claims CSV
@@ -299,11 +445,18 @@ with tabs[1]:
         )
         run_path = out_dir / run_folder
 
-        # Prefer all_claims.csv, but allow user to choose
         csv_files = sorted(run_path.glob("*.csv"))
-        default_csv = run_path / "all_claims.csv"
-        choices = [default_csv] if default_csv.exists() else []
-        choices += [p for p in csv_files if p.name != "all_claims.csv"]
+
+        preferred = []
+        labeled = run_path / "all_claims_labeled.csv"
+        raw = run_path / "all_claims.csv"
+
+        if labeled.exists():
+            preferred.append(labeled)
+        if raw.exists():
+            preferred.append(raw)
+
+        choices = preferred + [p for p in csv_files if p not in preferred]
 
         if not choices:
             st.error("No CSV files found in this run folder.")
@@ -346,10 +499,10 @@ with tabs[1]:
 
 
 # -------------------------
-# 3) Score validation
+# 4) Score validation
 # -------------------------
-with tabs[2]:
-    st.subheader("3) Score a filled validation sample and generate a report")
+with tabs[3]:
+    st.subheader("4) Score a filled validation sample and generate a report")
 
     run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
     if not run_folders:
@@ -393,10 +546,10 @@ with tabs[2]:
 
 
 # -------------------------
-# 4) Browse outputs
+# 5) Browse outputs
 # -------------------------
-with tabs[3]:
-    st.subheader("4) Browse outputs")
+with tabs[4]:
+    st.subheader("5) Browse outputs")
 
     run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
     if not run_folders:
@@ -411,6 +564,9 @@ with tabs[3]:
         st.write("Folder:", str(run_path))
 
         files = sorted([p for p in run_path.iterdir() if p.is_file()])
+        labeled = run_path / "all_claims_labeled.csv"
+        if labeled.exists():
+            files = [labeled] + [p for p in files if p != labeled]
         if not files:
             st.info("No files in this run folder.")
         else:
@@ -420,7 +576,7 @@ with tabs[3]:
             if fpath.suffix.lower() == ".csv":
                 df = pd.read_csv(fpath)
                 st.dataframe(df, width="stretch")
-            elif fpath.suffix.lower() in {".md", ".txt", ".log"}:
+            elif fpath.suffix.lower() in {".md", ".txt", ".log", ".jsonl", ".json"}:
                 st.markdown(f"### {fpath.name}")
                 st.text_area(
                     "Content",
