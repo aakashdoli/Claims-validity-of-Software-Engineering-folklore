@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    logger = setup_logger(args.log_level)
+    logger, _buffer = setup_logger(args.log_level)
 
     outdir_path = Path(args.outdir)
     outdir_path.mkdir(parents=True, exist_ok=True)
