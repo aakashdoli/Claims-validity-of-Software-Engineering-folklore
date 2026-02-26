@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterator, List, Tuple
+import re
 
 from bs4 import BeautifulSoup
 from ebooklib import epub
@@ -12,6 +13,29 @@ from .structures import ParagraphBlock
 PARA_SELECTORS = ["p", "li", "blockquote"]
 HEADING_SELECTORS = ["h1", "h2", "h3", "h4", "h5", "h6"]
 BLOCK_SELECTORS = PARA_SELECTORS + HEADING_SELECTORS
+
+_TOC_TITLE_RE = re.compile(
+    r"^\s*(table\s+of\s+contents?|contents?|toc|copyright|legal\s+notice|"
+    r"dedication|acknowledgements?|about\s+the\s+author|praise\s+for|"
+    r"also\s+by|cover|title\s+page|half.?title|index|bibliography|references)\s*$",
+    re.IGNORECASE,
+)
+
+_NOISE_LINE_RE = re.compile(
+    r"^(\d+[\.\)]\s+\S|\d{1,3}\s*$|isbn[\s:=]|\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _is_front_matter_item(first_heading: str, html: str) -> bool:
+    if first_heading and _TOC_TITLE_RE.match(first_heading.strip()):
+        return True
+    soup = BeautifulSoup(html, "html.parser")
+    lis = soup.find_all("li")
+    paras = soup.find_all("p")
+    if len(lis) > 10 and len(paras) <= 3:
+        return True
+    return False
 
 
 def _read_book_title(book: epub.EpubBook, fallback: str) -> str:
@@ -35,6 +59,14 @@ def _extract_blocks_in_order(html: str) -> List[Tuple[str, str]]:
     return out
 
 
+def _is_noise_paragraph(text: str) -> bool:
+    if len(text) < 15:
+        return True
+    if _NOISE_LINE_RE.match(text):
+        return True
+    return False
+
+
 def ingest_epub_paragraphs(path: str, logger) -> Iterator[ParagraphBlock]:
     p = Path(path)
     book_id = compute_book_id(path)
@@ -53,21 +85,22 @@ def ingest_epub_paragraphs(path: str, logger) -> Iterator[ParagraphBlock]:
 
         blocks = _extract_blocks_in_order(content)
 
-        # Maintain running headings within this spine item
-        current_chapter = ""
-        current_section = ""
-
-        # Prefer first h1 as chapter if present, else first heading
         first_heading = ""
         for tag_name, text in blocks:
             if tag_name in HEADING_SELECTORS:
                 first_heading = text
                 break
 
+        if _is_front_matter_item(first_heading, content):
+            logger.debug(f"Skipping front-matter: spine_index={spine_index} heading={first_heading!r}")
+            continue
+
+        current_chapter = ""
+        current_section = ""
+
         if first_heading:
             current_chapter = first_heading
         else:
-            # fallback to file name for traceability, but warn
             current_chapter = item.get_name() or f"spine_{spine_index}"
             logger.warning(f"Chapter title fallback used: {p.name} spine_index={spine_index}")
 
@@ -75,7 +108,6 @@ def ingest_epub_paragraphs(path: str, logger) -> Iterator[ParagraphBlock]:
 
         for tag_name, text in blocks:
             if tag_name in HEADING_SELECTORS:
-                # chapter heading
                 if tag_name == "h1":
                     current_chapter = text
                     current_section = ""
@@ -84,6 +116,8 @@ def ingest_epub_paragraphs(path: str, logger) -> Iterator[ParagraphBlock]:
                 continue
 
             if tag_name in PARA_SELECTORS:
+                if _is_noise_paragraph(text):
+                    continue
                 ebook_locator = f"epub:spine={spine_index};para={paragraph_index}"
                 yield ParagraphBlock(
                     book_id=book_id,
