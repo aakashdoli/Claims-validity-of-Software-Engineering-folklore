@@ -58,7 +58,15 @@ def extract_claim_rows_for_book(
 
     book_id = compute_book_id(input_path)
 
-    for block in ingestor(input_path, logger=logger):
+    # AZW3 requires cache_dir for calibre conversion
+    if p.suffix.lower() == ".azw3":
+        if not cache_dir:
+            cache_dir = str(p.parent / "_converted_cache")
+        blocks_iter = ingestor(input_path, cache_dir=cache_dir, logger=logger)
+    else:
+        blocks_iter = ingestor(input_path, logger=logger)
+
+    for block in blocks_iter:
         paragraphs_total += 1
 
         paragraph_text = (block.paragraph_text or "").strip()
@@ -72,7 +80,6 @@ def extract_claim_rows_for_book(
         for si, sent_text in enumerate(sentences):
             candidates_tested += 1
 
-            # HARD GATE: only detector-approved sentences become CSV rows
             res = detector.detect(type("Sent", (), {"text": sent_text})())
             if not getattr(res, "is_claim", False):
                 continue
@@ -108,7 +115,7 @@ def extract_claim_rows_for_book(
 
             rows.append(
                 RQ1ClaimRow(
-                    claim_id="",  # assigned later in batch_pipeline
+                    claim_id="",
                     book_id=book_id,
                     book_title=getattr(block, "book_title", p.stem),
                     chapter_title=chapter_title,
