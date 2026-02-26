@@ -12,11 +12,6 @@ import streamlit as st
 
 # Ensure src/ is importable when running from repo root
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-from dotenv import load_dotenv
-
-load_dotenv(REPO_ROOT / ".env")
-
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
@@ -33,6 +28,17 @@ except Exception as e:
     RunConfig = None
     setup_logger = None
     st.warning(f"Could not import se_claims_tool modules. Import error: {e}")
+
+try:
+    from se_claims_tool.llm.gemini_filter import GeminiClaimFilter, list_available_models
+except Exception as e:
+    GeminiClaimFilter = None
+    list_available_models = None
+
+try:
+    from se_claims_tool.llm.azure_filter import AzureClaimFilter
+except Exception as e:
+    AzureClaimFilter = None
 
 
 def run_cmd(cmd: list[str], cwd: Optional[Path] = None) -> tuple[int, str]:
@@ -74,13 +80,12 @@ st.caption(
 with st.sidebar:
     st.header("Paths")
 
-    default_books_dir = Path.home() / "se-books"
+    default_books_dir = REPO_ROOT / "books_upload"
     default_out_dir = REPO_ROOT / "out"
 
     books_dir = Path(st.text_input("Books folder", value=str(default_books_dir)))
     out_dir = Path(st.text_input("Output folder", value=str(default_out_dir)))
 
-    safe_mkdir(books_dir)
     safe_mkdir(out_dir)
 
     st.divider()
@@ -100,13 +105,7 @@ with st.sidebar:
 
 
 tabs = st.tabs(
-    [
-        "1) Extract",
-        "2) Label with API",
-        "3) Validate sample",
-        "4) Score validation",
-        "5) Browse outputs",
-    ]
+    ["1) Extract", "2) Validate sample", "3) Score validation", "4) Browse outputs", "5) Gemini Filter"]
 )
 
 
@@ -120,11 +119,10 @@ with tabs[0]:
         "Upload a book (.epub or .azw3)", type=["epub", "azw3"]
     )
     if uploaded_book is not None:
-        books_dir.mkdir(parents=True, exist_ok=True)
+        safe_mkdir(books_dir)  # ensure folder exists before writing
         dest = books_dir / uploaded_book.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(uploaded_book.getvalue())
-        st.success(f"Saved uploaded book to: {dest}")
+        st.success(f"Saved to: {dest}")
 
         # Remember uploaded file and rerun so it appears in the dropdown
         st.session_state["last_uploaded_book"] = dest.name
@@ -135,9 +133,8 @@ with tabs[0]:
         st.error(f"No .epub/.azw3 files found in: {books_dir}")
         st.stop()
 
-    book_files = [p for p in books if p.suffix.lower() != ".zip"]
-    book_names = [p.name for p in book_files]
-    book_map = {p.name: p for p in book_files}
+    book_names = [p.name for p in books if p.suffix.lower() != ".zip"]
+    book_map = {p.name: p for p in books}
 
     run_scope = st.radio(
         "What do you want to run?",
@@ -164,7 +161,7 @@ with tabs[0]:
             index=default_idx,
             key="book_selectbox",
         )
-        selected_path = book_map[selected]
+        selected_path = books_dir / selected
         st.caption(f"DEBUG selected_path: {selected_path}")
 
     elif run_scope == "Run multiple selected books":
@@ -299,140 +296,9 @@ with tabs[0]:
 
 
 # -------------------------
-# -------------------------
-# 2) Label with API
+# 2) Validate sample
 # -------------------------
 with tabs[1]:
-    st.header("Label claims with API (BTH Azure)")
-    st.write(
-        "This reads all_claims.csv from a run folder and writes all_claims_labeled.csv."
-    )
-
-    run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
-    if not run_folders:
-        st.info("No run folders found. Run extraction first.")
-        st.stop()
-
-    run_folder = st.selectbox(
-        "Select a run folder to label",
-        [p.name for p in run_folders],
-        key="label_run_folder",
-    )
-    run_path = out_dir / run_folder
-
-    input_csv = run_path / "all_claims.csv"
-    if not input_csv.exists():
-        st.error(f"Missing all_claims.csv in {run_path}")
-        st.stop()
-
-    st.write("Input:", str(input_csv))
-
-    batch_size = st.number_input(
-        "Batch size", min_value=5, max_value=50, value=20, step=5
-    )
-    min_conf = st.slider("Min confidence for strict keep", 0.0, 1.0, 0.7, 0.05)
-
-    out_csv = run_path / "all_claims_labeled.csv"
-    meta_json = run_path / "openai_label_metadata.json"
-
-    if st.button("Extract real claims (API)", type="primary"):
-        import time
-        import json
-        import pandas as pd
-        from se_claims_tool.llm.azure_client import AzureChatClient
-        from se_claims_tool.llm.claim_labeler import label_claims_with_azure
-
-        df = pd.read_csv(input_csv)
-        df = df.fillna("")
-
-        if "claim_id" not in df.columns or "claim_text" not in df.columns:
-            st.error("all_claims.csv must contain claim_id and claim_text columns.")
-            st.stop()
-
-        endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "").strip()
-        api_key = os.getenv("AZURE_OPENAI_API_KEY", "").strip()
-        api_version = os.getenv(
-            "AZURE_OPENAI_API_VERSION", "2024-02-15-preview"
-        ).strip()
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini").strip()
-
-        missing = []
-        if not endpoint:
-            missing.append("AZURE_OPENAI_ENDPOINT")
-        if not api_key:
-            missing.append("AZURE_OPENAI_API_KEY")
-        if not deployment:
-            missing.append("AZURE_OPENAI_DEPLOYMENT")
-        if missing:
-            st.error(f"Missing .env values: {missing}")
-            st.stop()
-
-        client = AzureChatClient()
-
-        rows = df.to_dict(orient="records")
-
-        with st.spinner("Labelling rows using API"):
-            labels, meta = label_claims_with_azure(
-                azure_client=client,
-                rows=rows,
-                model_name=deployment,
-                batch_size=int(batch_size),
-            )
-
-        by_id = {x.claim_id: x for x in labels}
-
-        df["api_is_claim"] = False
-        df["api_is_author_perspective"] = False
-        df["api_claim_type"] = ""
-        df["api_confidence"] = 0.0
-        df["api_reason"] = ""
-        df["api_model"] = deployment
-        df["api_run_id"] = time.strftime("%Y-%m-%dT%H-%M-%S")
-
-        for i, r in df.iterrows():
-            cid = str(r["claim_id"])
-            lab = by_id.get(cid)
-            if not lab:
-                continue
-            df.at[i, "api_is_claim"] = bool(lab.is_claim)
-            df.at[i, "api_is_author_perspective"] = bool(lab.is_author_perspective)
-            df.at[i, "api_claim_type"] = lab.claim_type
-            df.at[i, "api_confidence"] = float(lab.confidence)
-            df.at[i, "api_reason"] = lab.reason
-
-        df["api_keep_strict"] = (
-            (df["api_is_claim"] == True)
-            & (df["api_is_author_perspective"] == False)
-            & (df["api_confidence"] >= float(min_conf))
-        )
-
-        df.to_csv(out_csv, index=False)
-
-        meta_out = {
-            **(meta or {}),
-            "endpoint": endpoint,
-            "deployment": deployment,
-            "api_version": api_version,
-            "input_csv": str(input_csv),
-            "output_csv": str(out_csv),
-            "min_confidence": float(min_conf),
-            "total_rows": int(len(df)),
-            "strict_kept_rows": int(df["api_keep_strict"].sum()),
-        }
-        meta_json.write_text(
-            json.dumps(meta_out, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-        st.success(
-            f"Wrote {out_csv.name}. Strict kept {int(df['api_keep_strict'].sum())} / {len(df)} rows."
-        )
-        st.dataframe(df[df["api_keep_strict"] == True].head(200), width="stretch")
-
-
-# -------------------------
-# 3) Validate sample
-# -------------------------
-with tabs[2]:
     st.subheader("2) Generate a deterministic validation sample")
 
     # Pick run folder and claims CSV
@@ -445,18 +311,11 @@ with tabs[2]:
         )
         run_path = out_dir / run_folder
 
+        # Prefer all_claims.csv, but allow user to choose
         csv_files = sorted(run_path.glob("*.csv"))
-
-        preferred = []
-        labeled = run_path / "all_claims_labeled.csv"
-        raw = run_path / "all_claims.csv"
-
-        if labeled.exists():
-            preferred.append(labeled)
-        if raw.exists():
-            preferred.append(raw)
-
-        choices = preferred + [p for p in csv_files if p not in preferred]
+        default_csv = run_path / "all_claims.csv"
+        choices = [default_csv] if default_csv.exists() else []
+        choices += [p for p in csv_files if p.name != "all_claims.csv"]
 
         if not choices:
             st.error("No CSV files found in this run folder.")
@@ -499,10 +358,10 @@ with tabs[2]:
 
 
 # -------------------------
-# 4) Score validation
+# 3) Score validation
 # -------------------------
-with tabs[3]:
-    st.subheader("4) Score a filled validation sample and generate a report")
+with tabs[2]:
+    st.subheader("3) Score a filled validation sample and generate a report")
 
     run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
     if not run_folders:
@@ -546,10 +405,10 @@ with tabs[3]:
 
 
 # -------------------------
-# 5) Browse outputs
+# 4) Browse outputs
 # -------------------------
-with tabs[4]:
-    st.subheader("5) Browse outputs")
+with tabs[3]:
+    st.subheader("4) Browse outputs")
 
     run_folders = sorted([p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True)
     if not run_folders:
@@ -564,9 +423,6 @@ with tabs[4]:
         st.write("Folder:", str(run_path))
 
         files = sorted([p for p in run_path.iterdir() if p.is_file()])
-        labeled = run_path / "all_claims_labeled.csv"
-        if labeled.exists():
-            files = [labeled] + [p for p in files if p != labeled]
         if not files:
             st.info("No files in this run folder.")
         else:
@@ -576,7 +432,7 @@ with tabs[4]:
             if fpath.suffix.lower() == ".csv":
                 df = pd.read_csv(fpath)
                 st.dataframe(df, width="stretch")
-            elif fpath.suffix.lower() in {".md", ".txt", ".log", ".jsonl", ".json"}:
+            elif fpath.suffix.lower() in {".md", ".txt", ".log"}:
                 st.markdown(f"### {fpath.name}")
                 st.text_area(
                     "Content",
@@ -591,3 +447,227 @@ with tabs[4]:
                 data=fpath.read_bytes(),
                 file_name=fpath.name,
             )
+
+
+
+# -------------------------
+# 5) LLM Filter (Azure or Gemini)
+# -------------------------
+with tabs[4]:
+    st.subheader("5) Filter claims with LLM (secondary filter)")
+    st.caption(
+        "Reads all_claims.csv and writes all_claims_filtered.csv. "
+        "Each claim is classified as keep (genuine SE claim) or reject (false positive). "
+        "The original CSV is never modified."
+    )
+
+    # ── Provider selector ────────────────────────────────────────────────────
+    provider = st.radio(
+        "Choose LLM provider",
+        ["BTH Azure OpenAI (recommended)", "Google Gemini"],
+        index=0,
+        horizontal=True,
+    )
+
+    # ── Run folder + batch size ──────────────────────────────────────────────
+    run_folders_llm = sorted(
+        [p for p in out_dir.glob("run_*") if p.is_dir()], reverse=True
+    )
+    if not run_folders_llm:
+        st.info("No run folders found. Run extraction first (Tab 1).")
+    else:
+        run_folder_llm  = st.selectbox(
+            "Select a run folder to filter",
+            [str(p.name) for p in run_folders_llm],
+            key="llm_run_folder",
+        )
+        run_path_llm   = out_dir / run_folder_llm
+        input_csv_llm  = run_path_llm / "all_claims.csv"
+        output_csv_llm = run_path_llm / "all_claims_filtered.csv"
+
+        st.write("Input:", str(input_csv_llm))
+        st.write("Output:", str(output_csv_llm))
+
+        batch_size_llm = st.number_input(
+            "Batch size", min_value=1, max_value=50, value=20, step=1,
+            help="Claims sent per API call. 20 is a safe default.",
+            key="llm_batch_size",
+        )
+
+        st.divider()
+
+        # ── Azure credentials ────────────────────────────────────────────────
+        if provider.startswith("BTH Azure"):
+            st.markdown("**Azure OpenAI credentials** — fill in values from BTH IT (4th floor J-building)")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                az_endpoint = st.text_input(
+                    "Endpoint",
+                    value=os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
+                    placeholder="https://bth-ai.azure-api.net/student",
+                )
+                az_version = st.text_input(
+                    "API Version",
+                    value=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
+                )
+            with col2:
+                az_key = st.text_input(
+                    "API Key",
+                    type="password",
+                    value=os.environ.get("AZURE_OPENAI_API_KEY", ""),
+                )
+                az_deployment = st.text_input(
+                    "Deployment name",
+                    value=os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
+                    placeholder="e.g. gpt-4o or gpt-4.1",
+                )
+
+            st.caption(
+                "Tip: Add these to a `.env` file in your project root so you don't "
+                "have to paste them every time. See `.env.example` for the format."
+            )
+
+            ready = all([az_endpoint.strip(), az_key.strip(), az_version.strip(), az_deployment.strip()])
+            if not ready:
+                st.warning("Fill in all four Azure fields above to enable the filter.")
+
+        # ── Gemini credentials ───────────────────────────────────────────────
+        else:
+            gemini_key_llm = st.text_input(
+                "Gemini API key",
+                type="password",
+                value=os.environ.get("GEMINI_API_KEY", ""),
+                help="Get a free key at https://aistudio.google.com/app/apikey",
+                key="gemini_key_llm",
+            )
+
+            if gemini_key_llm.strip() and list_available_models:
+                if st.button("Load available Gemini models"):
+                    with st.spinner("Fetching model list..."):
+                        try:
+                            found = list_available_models(gemini_key_llm.strip())
+                            st.session_state["gemini_models_llm"] = found
+                            st.success(f"Found {len(found)} models.")
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+
+            raw_models_llm = st.session_state.get("gemini_models_llm", [])
+            if raw_models_llm:
+                flash_first_llm = sorted(raw_models_llm, key=lambda m: (0 if "flash" in m else 1, m))
+                gemini_model_llm = st.selectbox("Select model", flash_first_llm, key="gemini_model_llm")
+            else:
+                gemini_model_llm = None
+
+            ready = bool(gemini_key_llm.strip() and gemini_model_llm)
+            if not ready:
+                st.warning("Enter API key and load models to enable the filter.")
+
+        # ── Preview + Run ────────────────────────────────────────────────────
+        if not input_csv_llm.exists():
+            st.error(f"all_claims.csv not found in {run_folder_llm}. Run extraction first.")
+        else:
+            df_preview_llm = pd.read_csv(input_csv_llm)
+            st.info(f"Found {len(df_preview_llm)} claims to filter.")
+            st.dataframe(
+                df_preview_llm[["claim_id", "claim_text", "trigger_rule"]].head(10)
+            )
+
+            if st.button("Run LLM filter", type="primary", disabled=not ready, key="run_llm_filter"):
+                with st.spinner("Running LLM filter... this may take a minute."):
+                    try:
+                        logger_llm, handler_llm = setup_logger(log_level)
+
+                        if provider.startswith("BTH Azure"):
+                            if AzureClaimFilter is None:
+                                st.error("AzureClaimFilter could not be imported.")
+                                st.stop()
+                            lf = AzureClaimFilter(
+                                endpoint=az_endpoint.strip(),
+                                api_key=az_key.strip(),
+                                api_version=az_version.strip(),
+                                deployment=az_deployment.strip(),
+                                batch_size=int(batch_size_llm),
+                            )
+                        else:
+                            if GeminiClaimFilter is None:
+                                st.error("GeminiClaimFilter could not be imported.")
+                                st.stop()
+                            lf = GeminiClaimFilter(
+                                api_key=gemini_key_llm.strip(),
+                                model=gemini_model_llm,
+                                batch_size=int(batch_size_llm),
+                            )
+
+                        summary_llm = lf.filter_csv(
+                            input_csv=str(input_csv_llm),
+                            output_csv=str(output_csv_llm),
+                            logger=logger_llm,
+                        )
+
+                        model_info = summary_llm.get("deployment") or summary_llm.get("model_used", "")
+                        st.success(
+                            f"Done! ({model_info}) — "
+                            f"Kept **{summary_llm['kept']}**, "
+                            f"rejected **{summary_llm['rejected']}**, "
+                            f"unverified {summary_llm['unverified']} "
+                            f"out of {summary_llm['total']} claims."
+                        )
+
+                        st.subheader("Logs")
+                        log_text = "\n".join(handler_llm.lines[-200:]) or "No logs."
+                        if any("ERROR" in l for l in handler_llm.lines):
+                            st.warning("Some API calls failed — see logs below.")
+                        st.code(log_text)
+
+                        df_out_llm = pd.read_csv(output_csv_llm)
+                        st.subheader("Filtered results preview")
+                        col_k, col_r = st.columns(2)
+                        with col_k:
+                            st.write(f"**Kept ({summary_llm['kept']})**")
+                            st.dataframe(
+                                df_out_llm[df_out_llm["llm_verdict"] == "keep"][
+                                    ["claim_id", "claim_text", "trigger_rule", "llm_reason"]
+                                ],
+                                height=300,
+                            )
+                        with col_r:
+                            st.write(f"**Rejected ({summary_llm['rejected']})**")
+                            st.dataframe(
+                                df_out_llm[df_out_llm["llm_verdict"] == "reject"][
+                                    ["claim_id", "claim_text", "trigger_rule", "llm_reason"]
+                                ],
+                                height=300,
+                            )
+                        st.download_button(
+                            label="Download all_claims_filtered.csv",
+                            data=output_csv_llm.read_bytes(),
+                            file_name="all_claims_filtered.csv",
+                            mime="text/csv",
+                            key="dl_filtered_llm",
+                        )
+
+                    except Exception as e:
+                        st.error("LLM filter failed.")
+                        st.exception(e)
+
+        # ── Show previous results ────────────────────────────────────────────
+        if output_csv_llm.exists():
+            st.divider()
+            st.subheader("Previous filtered results")
+            df_prev = pd.read_csv(output_csv_llm)
+            if "llm_verdict" in df_prev.columns:
+                kept_n = (df_prev["llm_verdict"] == "keep").sum()
+                rej_n  = (df_prev["llm_verdict"] == "reject").sum()
+                st.info(f"Existing file: {kept_n} kept, {rej_n} rejected.")
+                st.dataframe(
+                    df_prev[["claim_id", "claim_text", "trigger_rule", "llm_verdict", "llm_reason"]],
+                    height=350,
+                )
+                st.download_button(
+                    label="Download existing all_claims_filtered.csv",
+                    data=output_csv_llm.read_bytes(),
+                    file_name="all_claims_filtered.csv",
+                    mime="text/csv",
+                    key="dl_existing_llm",
+                )
