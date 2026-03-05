@@ -9,13 +9,13 @@ import zipfile
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .config import RunConfig
 from .export.exporter import write_csv, write_jsonl, write_metadata
 from .models_rq1 import RQ1ClaimRow
-from .pipeline import extract_claim_rows_for_book
-
+from .pipeline import extract_claims_for_book
+from .llm.azure_llm_filter import AzureLLMFilter
 
 SUPPORTED = {".epub", ".azw3"}
 
@@ -48,29 +48,22 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _dedupe_files_by_hash(files: List[Path], logger) -> List[Path]:
-    """
-    Deduplicate by file content hash.
-    Keeps the first occurrence in sorted order.
-    """
+def _dedupe_files(files: List[Path], logger) -> List[Path]:
     seen = set()
     out: List[Path] = []
     for f in files:
         if f.suffix.lower() == ".zip":
             out.append(f)
             continue
-
         try:
             hx = _sha256_file(f)
         except Exception as e:
             logger.warning(f"Could not hash {f.name}. Keeping it. Error: {e}")
             out.append(f)
             continue
-
         if hx in seen:
             logger.warning(f"Skipping duplicate file by hash: {f.name}")
             continue
-
         seen.add(hx)
         out.append(f)
     return out
@@ -84,21 +77,19 @@ def run_corpus(
     inputs: str,
     outdir: str,
     cfg: RunConfig,
-    detector,
+    llm_filter: Optional[AzureLLMFilter],
     logger,
-    pilot_books: List[str] | None = None,
+    pilot_books=None,
 ) -> Dict[str, Any]:
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
 
     workdir = out / "_work"
     workdir.mkdir(exist_ok=True)
-
     cache_dir = str(workdir / "converted")
 
     files = _collect_inputs(inputs, workdir)
-
-    files = _dedupe_files_by_hash(files, logger)
+    files = _dedupe_files(files, logger)
 
     expanded: List[Path] = []
     for f in files:
@@ -112,8 +103,7 @@ def run_corpus(
             expanded.append(f)
 
     files = sorted(expanded)
-
-    files = _dedupe_files_by_hash(files, logger)
+    files = _dedupe_files(files, logger)
 
     if not files:
         raise ValueError("No .epub or .azw3 files found after filtering and deduplication.")
@@ -129,15 +119,16 @@ def run_corpus(
 
     next_id = 1
 
-    for f in files:
+    for book_idx, f in enumerate(files):
         try:
-            logger.info(f"Processing: {f.name}")
-            rows, meta = extract_claim_rows_for_book(
+            logger.info(f"=== Processing book {book_idx+1}/{len(files)}: {f.name} ===")
+            rows, meta = extract_claims_for_book(
                 input_path=str(f),
                 cfg=cfg,
-                detector=detector,
+                llm_filter=llm_filter,
                 logger=logger,
                 cache_dir=cache_dir,
+                book_idx=book_idx,
             )
 
             assigned: List[RQ1ClaimRow] = []
@@ -146,29 +137,27 @@ def run_corpus(
                 next_id += 1
                 assigned.append(replace(r, claim_id=cid))
 
-            cited = sum(1 for r in assigned if r.citation_status == "cited")
+            total = len(assigned)
+            cited     = sum(1 for r in assigned if r.citation_status == "cited")
             ambiguous = sum(1 for r in assigned if r.citation_status == "ambiguous")
             not_cited = sum(1 for r in assigned if r.citation_status == "not_cited")
-            total = len(assigned)
 
             def pct(x: int) -> float:
-                if total == 0:
-                    return 0.0
-                return x / total * 100.0
+                return round(x / total * 100.0, 2) if total else 0.0
 
-            per_book_summaries.append(
-                {
-                    "filename": f.name,
-                    "format": f.suffix.lower().lstrip("."),
-                    "claims_found": total,
-                    "cited_count": cited,
-                    "ambiguous_count": ambiguous,
-                    "not_cited_count": not_cited,
-                    "cited_pct": round(pct(cited), 2),
-                    "ambiguous_pct": round(pct(ambiguous), 2),
-                    "not_cited_pct": round(pct(not_cited), 2),
-                }
-            )
+            per_book_summaries.append({
+                "filename":         f.name,
+                "sentences_total":  meta.get("sentences_total", 0),
+                "nlp_candidates":   meta.get("nlp_candidates", 0),
+                "claims_found":     total,
+                "llm_used":         meta.get("llm_used", False),
+                "cited_count":      cited,
+                "ambiguous_count":  ambiguous,
+                "not_cited_count":  not_cited,
+                "cited_pct":        pct(cited),
+                "ambiguous_pct":    pct(ambiguous),
+                "not_cited_pct":    pct(not_cited),
+            })
 
             book_out = out / f.stem
             book_out.mkdir(parents=True, exist_ok=True)
@@ -178,16 +167,15 @@ def run_corpus(
 
             all_rows.extend(assigned)
 
-            manifest_rows.append(
-                {
-                    "filename": f.name,
-                    "format": f.suffix.lower().lstrip("."),
-                    "paragraphs_total": meta.get("paragraphs_total", ""),
-                    "candidates_tested": meta.get("candidates_tested", ""),
-                    "claims_found": meta.get("claims_found", ""),
-                    "timestamp_utc": meta.get("timestamp_utc", ""),
-                }
-            )
+            manifest_rows.append({
+                "filename":        f.name,
+                "sentences_total": meta.get("sentences_total", ""),
+                "nlp_candidates":  meta.get("nlp_candidates", ""),
+                "claims_found":    meta.get("claims_found", ""),
+                "llm_used":        meta.get("llm_used", ""),
+                "timestamp_utc":   meta.get("timestamp_utc", ""),
+            })
+
         except Exception as e:
             logger.error(f"Error on {f.name}: {e}")
             errors.append({"file": f.name, "error": str(e)})
@@ -195,59 +183,34 @@ def run_corpus(
     write_jsonl(str(out / "all_claims.jsonl"), all_rows)
     write_csv(str(out / "all_claims.csv"), all_rows)
 
-    man_path = out / "manifest.csv"
-    with man_path.open("w", encoding="utf-8", newline="") as fp:
-        fieldnames = list(manifest_rows[0].keys()) if manifest_rows else ["filename"]
-        w = csv.DictWriter(fp, fieldnames=fieldnames)
-        w.writeheader()
-        for r in manifest_rows:
-            w.writerow(r)
+    if manifest_rows:
+        man_path = out / "manifest.csv"
+        with man_path.open("w", encoding="utf-8", newline="") as fp:
+            w = csv.DictWriter(fp, fieldnames=list(manifest_rows[0].keys()))
+            w.writeheader()
+            for r in manifest_rows:
+                w.writerow(r)
 
     sum_path = out / "per_book_summary.csv"
     if per_book_summaries:
         with sum_path.open("w", encoding="utf-8", newline="") as fp:
-            fieldnames = list(per_book_summaries[0].keys())
-            w = csv.DictWriter(fp, fieldnames=fieldnames)
+            w = csv.DictWriter(fp, fieldnames=list(per_book_summaries[0].keys()))
             w.writeheader()
             for r in per_book_summaries:
                 w.writerow(r)
-    else:
-        with sum_path.open("w", encoding="utf-8", newline="") as fp:
-            fp.write(
-                "filename,format,claims_found,cited_count,ambiguous_count,not_cited_count,cited_pct,ambiguous_pct,not_cited_pct\n"
-            )
 
     total_claims = len(all_rows)
-    total_cited = sum(1 for r in all_rows if r.citation_status == "cited")
-    total_ambiguous = sum(1 for r in all_rows if r.citation_status == "ambiguous")
-    total_not_cited = sum(1 for r in all_rows if r.citation_status == "not_cited")
-
-    def pct_total(x: int) -> float:
-        if total_claims == 0:
-            return 0.0
-        return x / total_claims * 100.0
 
     summary = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "books_count": len(files),
+        "timestamp_utc":   datetime.now(timezone.utc).isoformat(),
+        "books_count":     len(files),
         "books_succeeded": len(manifest_rows),
-        "books_failed": len(errors),
-        "total_claims": total_claims,
-        "citation_breakdown": {
-            "cited_count": total_cited,
-            "ambiguous_count": total_ambiguous,
-            "not_cited_count": total_not_cited,
-            "cited_pct": round(pct_total(total_cited), 2),
-            "ambiguous_pct": round(pct_total(total_ambiguous), 2),
-            "not_cited_pct": round(pct_total(total_not_cited), 2),
-        },
-        "config": {
-            "max_llm_calls": cfg.max_llm_calls,
-            "language": cfg.language,
-            "cue_phrases_count": len(cfg.cue_phrases),
-        },
-        "errors": errors,
+        "books_failed":    len(errors),
+        "total_claims":    total_claims,
+        "llm_used":        llm_filter is not None,
+        "errors":          errors,
     }
+
     with (out / "run_summary.json").open("w", encoding="utf-8") as fp:
         json.dump(summary, fp, indent=2)
 
@@ -261,5 +224,5 @@ def run_corpus(
         zip_path.unlink()
     tmp_zip.replace(zip_path)
 
-    logger.info(f"Wrote outputs. Combined CSV: {out/'all_claims.csv'}")
+    logger.info(f"Pipeline complete. Total claims: {total_claims}")
     return summary
