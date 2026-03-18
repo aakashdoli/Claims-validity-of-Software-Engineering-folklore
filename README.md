@@ -1,50 +1,56 @@
-# se-claims-tool
+# Claims Validity of Software Engineering Folklore
 
-Extract **verbatim** causal claims (sentence-level) from software engineering books (EPUB first-class, PDF fallback),
-and export results to **JSONL + CSV** using a deterministic, rule-based claim detector.
+**Master's Thesis — PA2534 VT26**  
+Blekinge Institute of Technology
 
-## Install
+**Authors:** Aakash Doli · Ekshith Satnur  
+**Supervisors:** Davide Fucci (BTH) · Greg Wilson (Third Bit)
 
+---
+
+## Overview
+
+Two-stage pipeline for extracting SE folklore claims from practitioner books.
+
+**Stage 1 — NLP Pre-filter** (`nlp/claim_detector.py`)  
+Regex-based pattern matching across six claim types. High recall, no API calls.
+
+**Stage 2 — LLM Filter** (`llm/azure_llm_filter.py`)  
+Azure OpenAI (gpt-4o) verifies each candidate with context (prev + sentence + next). Temperature = 0.0 for reproducibility.
+
+**Claim definition:**  
+A declarative sentence asserting a generalizable proposition about SE practice, behavior, process, tools, or outcomes — falsifiable against empirical evidence.
+
+**Claim types:** NORMATIVE · CAUSAL · COMPARATIVE · QUANTITATIVE · GENERALIZATION · AUTHOR_PERSPECTIVE
+
+---
+
+## Setup
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
 source .venv/bin/activate
-
-pip install -U pip
 pip install -e .
 ```
 
-## Extract from a single book
+Copy `.env.example` to `.env` and fill in your Azure credentials.
 
+## Running
 ```bash
-python scripts/run_pipeline.py extract-batch --inputs path/to/book.epub --outdir out/book1
+streamlit run ui/app.py
 ```
 
-## Extract from a folder / ZIP (12-book corpus)
+---
 
-```bash
-python scripts/run_pipeline.py extract-batch --inputs path/to/big12_folder --outdir out/big12
+## Structure
 ```
-
-Outputs include:
-- per-book: `<outdir>/<filename>/claims.jsonl`, `claims.csv`, `run_metadata.json`
-- corpus: `<outdir>/all_claims.jsonl`, `<outdir>/all_claims.csv`, `<outdir>/manifest.csv`, `<outdir>/run_summary.json`, `<outdir>/results.zip`
-
-## Validation (manual verification sampling)
-
-1) Create a deterministic sample
-
-```bash
-python scripts/validate_sample.py --input out/<book>_claims.csv --out out/<book>_validation_sample.csv --n 50 --seed 42
-```
-
-2) Two coders fill Yes/No in these columns:
-- is_claim_manual_aakash, is_claim_manual_ekshith
-- locator_correct_manual_aakash, locator_correct_manual_ekshith
-- citation_status_correct_manual_aakash, citation_status_correct_manual_ekshith
-
-3) Score and generate a report
-
-```bash
-python scripts/score_validation.py --input out/<book>_validation_sample_filled.csv --out_md out/<book>_validation_report.md
+src/se_claims_tool/
+  nlp/claim_detector.py       # Stage 1: NLP pre-filter
+  llm/azure_llm_filter.py     # Stage 2: Azure LLM filter
+  ingest/                     # EPUB, AZW3, PDF ingestion
+  pipeline.py                 # Two-stage extraction logic
+  batch_pipeline.py           # Multi-book corpus runner
+  models_rq1.py               # Output schema (29 columns)
+  citations.py                # Citation detection
+  export/                     # CSV/JSONL writers
+ui/app.py                     # Streamlit interface
 ```
