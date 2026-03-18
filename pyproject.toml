@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "se-claims-tool"
-version = "0.1.0"
-description = "Local tool to extract causal claims from software engineering books (EPUB/PDF) with strict verbatim rules."
+version = "0.2.0"
+description = "Two-stage NLP+LLM pipeline for extracting SE folklore claims from practitioner books."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -21,11 +21,39 @@ dependencies = [
   "requests"
 ]
 
-[project.scripts]
-se-claims-tool = "se_claims_tool.cli:main"
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+```
+
+---
+
+**`.gitignore`**
+```
+# Environment
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Books — copyright protected, never commit
+*.epub
+*.azw3
+*.mobi
+*.pdf
+books/
+
+# Pipeline outputs — regenerated on each run
+out/
+out_ui/
+_work/
+_converted_cache/
+*.zip
+*.csv
+*.jsonl
