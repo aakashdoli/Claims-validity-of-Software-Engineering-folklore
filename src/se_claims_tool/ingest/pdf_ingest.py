@@ -1,78 +1,70 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterator, List
 
-import pdfplumber
+import fitz  # PyMuPDF — better word-spacing reconstruction than pdfplumber
 
-from ..models import SentenceRecord
-from ..tokenize import SentenceTokenizer
-from .common import compute_book_id, stable_hash, normalize_whitespace
-
-
-def _split_into_paragraphs(page_text: str) -> List[str]:
-    """
-    Heuristic paragraph splitter for PDFs:
-    - paragraphs separated by blank lines
-    - join hard-wrapped lines inside paragraphs
-    """
-    page_text = page_text or ""
-    page_text = page_text.replace("\r\n", "\n").replace("\r", "\n")
-    chunks = [c.strip() for c in page_text.split("\n\n") if c.strip()]
-
-    paras: List[str] = []
-    for c in chunks:
-        # Join hard-wrapped lines
-        c = " ".join([ln.strip() for ln in c.split("\n") if ln.strip()])
-        c = normalize_whitespace(c)
-        if c:
-            paras.append(c)
-    return paras
+from .common import compute_book_id, normalize_whitespace
+from .structures import ParagraphBlock
 
 
-def ingest_pdf(path: str, tokenizer: SentenceTokenizer) -> Iterator[SentenceRecord]:
-    """
-    PDF ingestion with deterministic ordering and stable IDs.
-    Adds page_number (1-based).
-    """
+_NOISE_RE = re.compile(
+    r"downloaded\s+by|licensed\s+to|taylor\s*&?\s*francis|"
+    r"routledge|crc\s+press|vitalsource|all\s+rights\s+reserved",
+    re.IGNORECASE,
+)
+
+
+def _split_paragraphs(text: str) -> List[str]:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    chunks = [c.strip() for c in text.split("\n\n") if c.strip()]
+    result = []
+    for chunk in chunks:
+        line = normalize_whitespace(" ".join(ln.strip() for ln in chunk.split("\n") if ln.strip()))
+        if line:
+            result.append(line)
+    return result
+
+
+def ingest_pdf_paragraphs(path: str, logger) -> Iterator[ParagraphBlock]:
+    p = Path(path)
     book_id = compute_book_id(path)
-    global_idx = 0
+    book_title = p.stem.replace("-", " ").replace("_", " ")
+    para_idx = 0
 
-    with pdfplumber.open(path) as pdf:
-        for page_i, page in enumerate(pdf.pages):
-            page_number = page_i + 1  # 1-based for humans
-            chapter_title = f"page_{page_number}"
-            chapter_id = f"pdf_{page_number:04d}_{stable_hash(chapter_title)[:8]}"
+    doc = fitz.open(path)
+    try:
+        meta = doc.metadata or {}
+        if meta.get("title"):
+            book_title = normalize_whitespace(str(meta["title"]))
 
+        for page_i in range(len(doc)):
             try:
-                text = page.extract_text() or ""
-                text = text.replace("\u00ad", "")  # remove soft hyphen
-                text = normalize_whitespace(text)
-
-                if not text:
+                page = doc[page_i]
+                text = (page.get_text("text") or "").replace("\u00ad", "")
+                if not text.strip():
                     continue
 
-                paragraphs = _split_into_paragraphs(text)
+                for para in _split_paragraphs(text):
+                    if len(para) < 30 or _NOISE_RE.search(para):
+                        continue
 
-                for p_i, para in enumerate(paragraphs):
-                    paragraph_id = f"{chapter_id}_p{p_i:06d}"
-                    sents = tokenizer.split(para)
+                    yield ParagraphBlock(
+                        book_id=book_id,
+                        book_title=book_title,
+                        source_path=p.name,
+                        spine_index=page_i,
+                        chapter_title=f"Page {page_i + 1}",
+                        section_title="",
+                        paragraph_index=para_idx,
+                        paragraph_text=para,
+                        ebook_locator=f"pdf:page={page_i + 1};para={para_idx}",
+                    )
+                    para_idx += 1
 
-                    for s_i, sent in enumerate(sents):
-                        yield SentenceRecord(
-                            book_id=book_id,
-                            source_path=str(Path(path).name),
-                            chapter_id=chapter_id,
-                            chapter_title=chapter_title,
-                            paragraph_id=paragraph_id,
-                            sentence_index=s_i,
-                            global_sentence_index=global_idx,
-                            page_number=page_number,
-                            spine_index=None,
-                            text=sent,
-                        )
-                        global_idx += 1
-
-            except Exception:
-                # Let caller log; keep ingestion robust.
-                continue
+            except Exception as e:
+                logger.warning(f"Page {page_i + 1} extraction failed: {e}")
+    finally:
+        doc.close()

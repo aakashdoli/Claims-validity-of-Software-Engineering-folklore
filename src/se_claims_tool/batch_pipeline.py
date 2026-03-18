@@ -1,4 +1,12 @@
-# src/se_claims_tool/batch_pipeline.py
+"""
+batch_pipeline.py
+-----------------
+Runs the two-stage claim extraction pipeline across multiple books.
+
+Usage:
+    from se_claims_tool.batch_pipeline import run_corpus
+    summary = run_corpus(inputs="/path/to/books", outdir="/path/to/out", cfg=cfg, llm_filter=filter, logger=logger)
+"""
 from __future__ import annotations
 
 import csv
@@ -17,7 +25,7 @@ from .models_rq1 import RQ1ClaimRow
 from .pipeline import extract_claims_for_book
 from .llm.azure_llm_filter import AzureLLMFilter
 
-SUPPORTED = {".epub", ".azw3"}
+SUPPORTED = {".epub", ".azw3", ".pdf"}
 
 
 def _collect_inputs(inputs: str, workdir: Path) -> List[Path]:
@@ -25,18 +33,14 @@ def _collect_inputs(inputs: str, workdir: Path) -> List[Path]:
     if p.is_dir():
         files = [f for f in p.rglob("*") if f.suffix.lower() in SUPPORTED or f.suffix.lower() == ".zip"]
         return sorted(files)
-
     if p.is_file() and p.suffix.lower() == ".zip":
         extract_dir = workdir / "uploaded_zip"
         extract_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(p, "r") as z:
             z.extractall(extract_dir)
-        files = [f for f in extract_dir.rglob("*") if f.suffix.lower() in SUPPORTED]
-        return sorted(files)
-
+        return sorted([f for f in extract_dir.rglob("*") if f.suffix.lower() in SUPPORTED])
     if p.is_file() and p.suffix.lower() in SUPPORTED:
         return [p]
-
     raise ValueError("inputs must be a folder, a .zip, or a single .epub/.azw3")
 
 
@@ -49,20 +53,16 @@ def _sha256_file(path: Path) -> str:
 
 
 def _dedupe_files(files: List[Path], logger) -> List[Path]:
-    seen = set()
-    out: List[Path] = []
+    seen, out = set(), []
     for f in files:
-        if f.suffix.lower() == ".zip":
-            out.append(f)
-            continue
         try:
             hx = _sha256_file(f)
         except Exception as e:
-            logger.warning(f"Could not hash {f.name}. Keeping it. Error: {e}")
+            logger.warning(f"Could not hash {f.name}, keeping it. Error: {e}")
             out.append(f)
             continue
         if hx in seen:
-            logger.warning(f"Skipping duplicate file by hash: {f.name}")
+            logger.warning(f"Skipping duplicate: {f.name}")
             continue
         seen.add(hx)
         out.append(f)
@@ -79,44 +79,43 @@ def run_corpus(
     cfg: RunConfig,
     llm_filter: Optional[AzureLLMFilter],
     logger,
-    pilot_books=None,
+    pilot_books: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    """
+    Run the two-stage pipeline across all books in inputs.
+    Writes per-book CSVs and a combined all_claims.csv to outdir.
+    Books and CSVs are NOT stored permanently — outdir is temporary/session only.
+    """
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
-
     workdir = out / "_work"
     workdir.mkdir(exist_ok=True)
     cache_dir = str(workdir / "converted")
 
     files = _collect_inputs(inputs, workdir)
-    files = _dedupe_files(files, logger)
 
+    # Expand any zips
     expanded: List[Path] = []
     for f in files:
         if f.suffix.lower() == ".zip":
-            extract_dir = workdir / f"zip_{f.stem}"
-            extract_dir.mkdir(parents=True, exist_ok=True)
+            xdir = workdir / f"zip_{f.stem}"
+            xdir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(f, "r") as z:
-                z.extractall(extract_dir)
-            expanded.extend([x for x in extract_dir.rglob("*") if x.suffix.lower() in SUPPORTED])
+                z.extractall(xdir)
+            expanded.extend([x for x in xdir.rglob("*") if x.suffix.lower() in SUPPORTED])
         else:
             expanded.append(f)
 
-    files = sorted(expanded)
-    files = _dedupe_files(files, logger)
-
-    if not files:
-        raise ValueError("No .epub or .azw3 files found after filtering and deduplication.")
+    files = _dedupe_files(sorted(expanded), logger)
 
     if pilot_books:
         pilot_set = {b.strip() for b in pilot_books if b.strip()}
         files = [f for f in files if f.stem in pilot_set or f.name in pilot_set]
 
-    manifest_rows: List[Dict[str, Any]] = []
-    all_rows: List[RQ1ClaimRow] = []
-    per_book_summaries: List[Dict[str, Any]] = []
-    errors: List[Dict[str, str]] = []
+    if not files:
+        raise ValueError("No .epub or .azw3 files found.")
 
+    manifest_rows, all_rows, per_book_summaries, errors = [], [], [], []
     next_id = 1
 
     for book_idx, f in enumerate(files):
@@ -131,6 +130,7 @@ def run_corpus(
                 book_idx=book_idx,
             )
 
+            # Assign final claim IDs
             assigned: List[RQ1ClaimRow] = []
             for r in rows:
                 cid = _format_claim_id(next_id)
@@ -142,8 +142,7 @@ def run_corpus(
             ambiguous = sum(1 for r in assigned if r.citation_status == "ambiguous")
             not_cited = sum(1 for r in assigned if r.citation_status == "not_cited")
 
-            def pct(x: int) -> float:
-                return round(x / total * 100.0, 2) if total else 0.0
+            def pct(x): return round(x / total * 100, 2) if total else 0.0
 
             per_book_summaries.append({
                 "filename":         f.name,
@@ -166,7 +165,6 @@ def run_corpus(
             write_metadata(str(book_out / "run_metadata.json"), meta)
 
             all_rows.extend(assigned)
-
             manifest_rows.append({
                 "filename":        f.name,
                 "sentences_total": meta.get("sentences_total", ""),
@@ -183,6 +181,7 @@ def run_corpus(
     write_jsonl(str(out / "all_claims.jsonl"), all_rows)
     write_csv(str(out / "all_claims.csv"), all_rows)
 
+    # Write manifest
     if manifest_rows:
         man_path = out / "manifest.csv"
         with man_path.open("w", encoding="utf-8", newline="") as fp:
@@ -191,8 +190,9 @@ def run_corpus(
             for r in manifest_rows:
                 w.writerow(r)
 
-    sum_path = out / "per_book_summary.csv"
+    # Write per-book summary
     if per_book_summaries:
+        sum_path = out / "per_book_summary.csv"
         with sum_path.open("w", encoding="utf-8", newline="") as fp:
             w = csv.DictWriter(fp, fieldnames=list(per_book_summaries[0].keys()))
             w.writeheader()
@@ -200,7 +200,6 @@ def run_corpus(
                 w.writerow(r)
 
     total_claims = len(all_rows)
-
     summary = {
         "timestamp_utc":   datetime.now(timezone.utc).isoformat(),
         "books_count":     len(files),
@@ -210,16 +209,14 @@ def run_corpus(
         "llm_used":        llm_filter is not None,
         "errors":          errors,
     }
-
     with (out / "run_summary.json").open("w", encoding="utf-8") as fp:
         json.dump(summary, fp, indent=2)
 
+    # Create results zip
     zip_path = out / "results.zip"
     tmp_base = out.parent / (out.name + "_results")
-    tmp_zip = tmp_base.with_suffix(".zip")
-    if tmp_zip.exists():
-        tmp_zip.unlink()
     shutil.make_archive(str(tmp_base), "zip", out)
+    tmp_zip = tmp_base.with_suffix(".zip")
     if zip_path.exists():
         zip_path.unlink()
     tmp_zip.replace(zip_path)

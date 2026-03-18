@@ -108,14 +108,15 @@ A declarative sentence asserting a generalizable proposition about SE practice, 
 # ── Main: Book Upload ─────────────────────────────────────────────────────────
 st.header("1️⃣  Upload Books")
 st.info(
-    "📋 Upload .epub or .azw3 files. "
+    "📋 Upload .epub, .azw3 or .pdf files. "
+    "Watermarked PDFs from Taylor & Francis are fully supported. "
     "Books are processed in memory only — not stored on disk or committed to git.",
     icon="🔒",
 )
 
 uploaded_files = st.file_uploader(
-    "Upload practitioner SE books (.epub, .azw3)",
-    type=["epub", "azw3"],
+    "Upload practitioner SE books (.epub, .azw3, .pdf)",
+    type=["epub", "azw3", "pdf"],
     accept_multiple_files=True,
 )
 

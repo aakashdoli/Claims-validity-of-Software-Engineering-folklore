@@ -1,6 +1,6 @@
 ebooklib
 beautifulsoup4
-pdfplumber
+PyMuPDF
 pysbd
 pandas
 openpyxl

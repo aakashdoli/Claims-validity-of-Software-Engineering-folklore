@@ -31,11 +31,12 @@ from .citations import decide_citation_status
 from .ingest.common import compute_book_id
 from .ingest.epub_ingest import ingest_epub_paragraphs
 from .ingest.azw3_ingest import ingest_azw3_paragraphs
+from .ingest.pdf_ingest import ingest_pdf_paragraphs
 from .models_rq1 import RQ1ClaimRow
 from .nlp.claim_detector import NLPClaimDetector
 from .llm.azure_llm_filter import AzureLLMFilter, LLMFilterResult
 
-SUPPORTED = {".epub", ".azw3"}
+SUPPORTED = {".epub", ".azw3", ".pdf"}
 
 
 def _sentence_split(paragraph_text: str) -> List[str]:
@@ -50,6 +51,8 @@ def _pick_ingestor(path: str):
         return ingest_epub_paragraphs
     if suffix == ".azw3":
         return ingest_azw3_paragraphs
+    if suffix == ".pdf":
+        return ingest_pdf_paragraphs
     raise ValueError(f"Unsupported format: {suffix}")
 
 

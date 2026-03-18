@@ -6,7 +6,7 @@ Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: ebooklib
 Requires-Dist: beautifulsoup4
-Requires-Dist: pdfplumber
+Requires-Dist: PyMuPDF
 Requires-Dist: pysbd
 Requires-Dist: pandas
 Requires-Dist: openpyxl
