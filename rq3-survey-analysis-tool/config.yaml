@@ -1,0 +1,168 @@
+# =============================================================================
+# RQ3 Survey Analysis Tool — single source of truth for every tunable value.
+#
+# NOTHING in this file may be duplicated as a literal anywhere in the codebase.
+# Every value here is echoed into the run manifest and into the frontend's
+# Methodology panel, so any published result can be audited against the exact
+# settings that produced it.
+# =============================================================================
+
+dataset:
+  # Which export produces the current result set. Re-running on a new export is
+  # a FULL re-run: the pipeline never merges or appends across exports.
+  input_file: "data/raw/export (4).xlsx"
+  claims_file: "data/claims.csv"
+  evidence_file: "data/claims_evidence.csv"
+  processed_dir: "data/processed"
+  results_dir: "data/results"
+
+likert:
+  # 5-point agreement scale as built in BTHSurvey, plus a 6th non-response code.
+  min: 1
+  max: 5
+  idk_code: 6
+  labels:
+    1: "Strongly Disagree"
+    2: "Disagree"
+    3: "Neither agree or disagree"
+    4: "Agree"
+    5: "Strongly Agree"
+  idk_label: "I don't know how to answer this"
+  # BTHSurvey writes 999 for "question not answered".
+  missing_code: 999
+
+idk_rule:
+  # ONE rule, applied identically in every stage (Stages 1-5):
+  #   - IDK is NEVER converted to a number and NEVER imputed.
+  #   - IDK is excluded from medians, distributions used for bimodality,
+  #     and from the ranked data of every statistical test.
+  #   - The IDK RATE is reported separately per claim and per subgroup,
+  #     because a high IDK rate is itself a finding.
+  exclude_from_median: true
+  exclude_from_tests: true
+  report_rate_separately: true
+
+descriptives:
+  # A claim whose IDK rate reaches this is flagged for manual review: at this
+  # level the median is being computed from a shrinking, self-selected subset of
+  # respondents, which is a finding in its own right and a caveat on the claim.
+  high_idk_rate_pct: 25.0
+
+  # Stage 1 bimodality flag. Primary rule is the explicit tail/middle heuristic;
+  # Sarle's bimodality coefficient is computed alongside it as a cross-check but
+  # does NOT drive the flag (it is unreliable on 5-point ordinal data).
+  bimodality:
+    rule: "tail_middle"          # "tail_middle" | "coefficient" | "both"
+    min_lower_tail_pct: 25.0     # % of valid (non-IDK) answers in {1,2}
+    min_upper_tail_pct: 25.0     # % of valid (non-IDK) answers in {4,5}
+    max_middle_pct: 20.0         # % of valid (non-IDK) answers equal to 3
+    coefficient_threshold: 0.555 # Sarle's BC reference value (uniform dist.)
+    min_valid_n: 30              # below this, bimodality is not assessed
+
+comparisons:
+  # Stage 2. Any subgroup with fewer than MIN_SUBGROUP_SIZE valid (non-IDK)
+  # answers on a given claim is dropped from that claim's comparison, and the
+  # drop is recorded as an explicit exclusion — never silently ignored.
+  # NOTE: the previous pipeline used 3, which was flagged as a bug.
+  min_subgroup_size: 10
+  # A comparison needs at least this many surviving groups to run at all.
+  min_groups: 2
+  alpha: 0.05
+  # Pairwise Mann-Whitney follow-ups run only when the Kruskal-Wallis omnibus
+  # is significant AFTER Benjamini-Hochberg correction.
+  pairwise_requires_significant_omnibus: true
+  # Demographic variables to compare on. Must match columns in the clean CSV.
+  variables:
+    - experience
+    - role
+    - team_size
+    - industry
+    - company_size
+    - country
+
+effect_size:
+  # Stage 3. Romano, Kromrey, Coraggio & Skowronek (2006) thresholds.
+  thresholds:
+    small: 0.14
+    medium: 0.33
+    large: 0.47
+
+correction:
+  # Stage 4. Benjamini-Hochberg FDR, applied PER DEMOGRAPHIC-VARIABLE FAMILY
+  # (the 50 claims within "experience", separately from the 50 within "role",
+  # ...). Not pooled globally (over-correction) and never skipped.
+  method: "fdr_bh"
+  alpha: 0.05
+  family_scope: "per_variable"
+  # Pairwise follow-ups are corrected within their own (claim x variable) set.
+  correct_pairwise_within_claim: true
+
+evidence:
+  # Claim IDs are not unique in the 4,091-claim corpus, so an imported RQ2 label
+  # is only accepted when the claim text the evidence work was done against also
+  # matches the text respondents actually saw. Below this similarity the row is
+  # rejected and the claim stays PENDING rather than inheriting a label that was
+  # reasoned about a different claim.
+  min_text_similarity: 0.60
+
+belief:
+  # Stage 5. PENDING DAVIDE'S SIGN-OFF — DO NOT TREAT AS FINAL.
+  # A claim counts as "widely believed" when its median (IDK excluded) is >=
+  # this value. 3.5 is a placeholder carried over from the survey plan.
+  threshold: 3.5
+  # Claims whose median sits within this distance of the threshold are marked
+  # borderline and require manual review before being reported as classified.
+  borderline_delta: 0.2
+  # THREE categories only. Strength qualifiers ("weak evidence", "moderate
+  # evidence", "mixed/contextual") are NOT separate categories: the importer
+  # collapses them onto the base label and preserves the wording in the
+  # separate `evidence_strength` field, so nothing is lost but the matrix stays
+  # a 2 x 3 grid.
+  evidence_labels:
+    - "SUPPORTED"
+    - "CONTRADICTED"
+    - "NO EVIDENCE FOUND"
+  # Labels that are NOT scored as match or mismatch. A claim with no evidence
+  # located cannot agree or disagree with belief — there is nothing to agree
+  # with — so it gets its own bucket in the matrix and is excluded from the
+  # match/mismatch counts rather than being counted as either.
+  unscored_labels:
+    - "NO EVIDENCE FOUND"
+  # Label used for claims whose RQ2 mapping has not been entered yet.
+  pending_label: "PENDING"
+
+comments:
+  # Stage 6. Retrieval / filtering / prioritisation only — the tool does not
+  # generate qualitative codes. Coding stays a human task.
+  high_volume_threshold: 30    # comment count that alone earns review priority
+  priority_weights:
+    bimodal: 3
+    significant_subgroup_difference: 2
+    belief_evidence_mismatch: 3
+    borderline_threshold: 1
+    high_comment_volume: 1
+
+quality:
+  # Data-quality flags. FLAG ONLY — the pipeline never auto-excludes a
+  # respondent. Exclusion is a manual decision made from the frontend panel.
+  low_effort:
+    max_distinct_values: 1       # used <= this many distinct answers over 50 claims
+    modal_answer_share: 0.90     # >= this share of answers on one single value
+    idk_rate: 0.90               # >= this share of answers are IDK
+    # Completion-time rule. Applied only when the export carries a duration
+    # column; when absent the check reports "unavailable", never "passed".
+    min_completion_seconds: 180
+  require_consent: true
+
+reporting:
+  # Persistent caveats that must appear in the frontend and in every export.
+  sampling_caveat: >-
+    Purposive sampling subject to availability constraints. Results describe the
+    beliefs of the surveyed sample, not of software engineering practitioners in
+    general, and no inference to a wider population is supported
+    (Baltes & Ralph, 2022, Empirical Software Engineering).
+  question_order_caveat: >-
+    BTHSurvey provides no question-order randomisation, so all 50 claims were
+    presented in a fixed order to every respondent. Order effects (fatigue,
+    priming, anchoring) cannot be estimated or corrected for by this tool and
+    stand as a documented construct-validity limitation.

@@ -1,0 +1,127 @@
+{
+  "tool_version": "1.0.0",
+  "run_id": "20260818T114242Z-0c8128bf",
+  "timestamp_utc": "2026-08-18T11:42:42.526628+00:00",
+  "input_file": "/Users/aakashdoli/Master Thesis/RQ3 Survey Analysis Tool/data/raw/export (2).xlsx",
+  "input_sha256": "0c8128bf740eb6cdbb10ef49b13c4a495e6ac6190bf340ef86281c894f0a00e1",
+  "input_bytes": 722333,
+  "n_respondents": 743,
+  "n_claims": 50,
+  "n_comments": 5517,
+  "config_path": "/Users/aakashdoli/Master Thesis/RQ3 Survey Analysis Tool/config.yaml",
+  "config": {
+    "dataset": {
+      "input_file": "data/raw/export (2).xlsx",
+      "claims_file": "data/claims.csv",
+      "evidence_file": "data/claims_evidence.csv",
+      "processed_dir": "data/processed",
+      "results_dir": "data/results"
+    },
+    "likert": {
+      "min": 1,
+      "max": 5,
+      "idk_code": 6,
+      "labels": {
+        "1": "Strongly Disagree",
+        "2": "Disagree",
+        "3": "Neither agree or disagree",
+        "4": "Agree",
+        "5": "Strongly Agree"
+      },
+      "idk_label": "I don't know how to answer this",
+      "missing_code": 999
+    },
+    "idk_rule": {
+      "exclude_from_median": true,
+      "exclude_from_tests": true,
+      "report_rate_separately": true
+    },
+    "descriptives": {
+      "high_idk_rate_pct": 25.0,
+      "bimodality": {
+        "rule": "tail_middle",
+        "min_lower_tail_pct": 25.0,
+        "min_upper_tail_pct": 25.0,
+        "max_middle_pct": 20.0,
+        "coefficient_threshold": 0.555,
+        "min_valid_n": 30
+      }
+    },
+    "comparisons": {
+      "min_subgroup_size": 10,
+      "min_groups": 2,
+      "alpha": 0.05,
+      "pairwise_requires_significant_omnibus": true,
+      "variables": [
+        "experience",
+        "role",
+        "team_size",
+        "industry",
+        "company_size",
+        "country"
+      ]
+    },
+    "effect_size": {
+      "thresholds": {
+        "small": 0.14,
+        "medium": 0.33,
+        "large": 0.47
+      }
+    },
+    "correction": {
+      "method": "fdr_bh",
+      "alpha": 0.05,
+      "family_scope": "per_variable",
+      "correct_pairwise_within_claim": true
+    },
+    "evidence": {
+      "min_text_similarity": 0.6
+    },
+    "belief": {
+      "threshold": 3.5,
+      "borderline_delta": 0.2,
+      "evidence_labels": [
+        "SUPPORTED",
+        "CONTRADICTED",
+        "NO EVIDENCE FOUND"
+      ],
+      "unscored_labels": [
+        "NO EVIDENCE FOUND"
+      ],
+      "pending_label": "PENDING"
+    },
+    "comments": {
+      "high_volume_threshold": 30,
+      "priority_weights": {
+        "bimodal": 3,
+        "significant_subgroup_difference": 2,
+        "belief_evidence_mismatch": 3,
+        "borderline_threshold": 1,
+        "high_comment_volume": 1
+      }
+    },
+    "quality": {
+      "low_effort": {
+        "max_distinct_values": 1,
+        "modal_answer_share": 0.9,
+        "idk_rate": 0.9,
+        "min_completion_seconds": 180
+      },
+      "require_consent": true
+    },
+    "reporting": {
+      "sampling_caveat": "Purposive sampling subject to availability constraints. Results describe the beliefs of the surveyed sample, not of software engineering practitioners in general, and no inference to a wider population is supported (Baltes & Ralph, 2022, Empirical Software Engineering).",
+      "question_order_caveat": "BTHSurvey provides no question-order randomisation, so all 50 claims were presented in a fixed order to every respondent. Order effects (fatigue, priming, anchoring) cannot be estimated or corrected for by this tool and stand as a documented construct-validity limitation."
+    }
+  },
+  "library_versions": {
+    "pandas": "3.0.5",
+    "scipy": "1.18.0",
+    "statsmodels": "0.14.6"
+  },
+  "python_version": "3.14.2",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "notes": [
+    "No completion-duration column in this export; the speeding check reports 'unavailable' rather than passing respondents by default."
+  ]
+}

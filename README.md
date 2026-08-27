@@ -8,6 +8,19 @@ Blekinge Institute of Technology
 
 ---
 
+## Repository
+
+| Path | Research question | What it does |
+|---|---|---|
+| [`src/`](src/), [`ui/`](ui/) | **RQ1** | NLP + Azure OpenAI extraction of 4,091 claims from 12 practitioner books |
+| [`rq3-survey-analysis-tool/`](rq3-survey-analysis-tool/) | **RQ3** | Analyses 751 practitioner survey responses to the final 50 claims and cross-tabulates belief against the RQ2 evidence review |
+
+**RQ3 headline:** 12 of 41 scored claims (29%) are belief-evidence mismatches —
+3 believed despite contradicting evidence, 9 not believed despite supporting
+evidence. See [the RQ3 README](rq3-survey-analysis-tool/README.md).
+
+---
+
 ## Overview
 
 Two-stage pipeline for extracting SE folklore claims from practitioner books.

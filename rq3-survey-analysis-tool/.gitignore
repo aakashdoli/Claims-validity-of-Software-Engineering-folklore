@@ -1,0 +1,25 @@
+# --- Respondent-level data: NEVER committed -------------------------------
+# 751 real survey responses collected under a consent form, including 5,590
+# free-text comments. Aggregate results are committed; individual responses
+# are not. Keep these local (or in BTHSurvey / BTH storage).
+data/raw/
+data/processed/
+# ...and any stray export left elsewhere in the tree
+export*.xlsx
+**/export*.xlsx
+data/results/*/full_run.json
+data/results/*/flagged_respondents.csv
+
+# --- Environments and build output ---------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+frontend/dist/
+frontend/.env.local
+
+# --- OS / editor cruft ----------------------------------------------------
+.DS_Store
+~$*
+*.swp
