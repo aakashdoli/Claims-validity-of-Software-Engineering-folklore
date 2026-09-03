@@ -1,2 +1,0 @@
-[console_scripts]
-se-claims-tool = se_claims_tool.cli:main

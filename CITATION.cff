@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this software or its results, please cite the thesis below."
+title: "Claims Validity of Software Engineering Folklore"
+abstract: >-
+  Tooling for a master's thesis examining which claims made in practitioner
+  software engineering books are supported by empirical evidence and believed
+  by practitioners. Supervised by Davide Fucci (Blekinge Institute of
+  Technology) and Greg Wilson (Third Bit).
+type: software
+authors:
+  - family-names: Doli
+    given-names: Aakash
+    affiliation: Blekinge Institute of Technology
+  - family-names: Satnur
+    given-names: Ekshith
+    affiliation: Blekinge Institute of Technology
+license: MIT
+repository-code: "https://github.com/aakashdoli/Claims-validity-of-Software-Engineering-folklore"
+keywords:
+  - software engineering
+  - empirical software engineering
+  - software engineering folklore
+  - evidence-based software engineering
+preferred-citation:
+  type: thesis
+  title: "Claims Validity of Software Engineering Folklore"
+  authors:
+    - family-names: Doli
+      given-names: Aakash
+      affiliation: Blekinge Institute of Technology
+    - family-names: Satnur
+      given-names: Ekshith
+      affiliation: Blekinge Institute of Technology
+  year: 2026
+  month: 6
+  institution:
+    name: Blekinge Institute of Technology
+  thesis-type: "Master's thesis"

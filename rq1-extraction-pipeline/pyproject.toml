@@ -26,34 +26,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-```
-
----
-
-**`.gitignore`**
-```
-# Environment
-.env
-.venv/
-venv/
-__pycache__/
-*.pyc
-*.egg-info/
-dist/
-build/
-
-# Books — copyright protected, never commit
-*.epub
-*.azw3
-*.mobi
-*.pdf
-books/
-
-# Pipeline outputs — regenerated on each run
-out/
-out_ui/
-_work/
-_converted_cache/
-*.zip
-*.csv
-*.jsonl
