@@ -13,38 +13,56 @@ against what the RQ2 evidence review found.
 ## Results
 
 ```
-                        SUPPORTED   CONTRADICTED   NO EVIDENCE FOUND
-Widely believed                23            3 ⚑                   6
-Not widely believed           9 ⚑                6                 3
+                        SUPPORTED   CONTRADICTED   NO EVIDENCE FOUND   ROW TOTAL
+Majority agreed                21            4 ⚑                   4          29
+Majority disagreed            1 ⚑                2                  1           4
+                       ----------   ------------   -----------------   ---------
+                               22              6                   5          33
 ```
 
-**12 of 41 scored claims (29%) are belief–evidence mismatches.**
+**5 of 28 scored claims (17.9%) are belief–evidence mismatches.**
 
 | | |
 |---|---|
 | Respondents | 751 (all 50 claims answered by everyone) |
-| Match | 29 — belief agrees with the evidence |
-| **Mismatch** | **12** — 3 believed-but-contradicted, 9 not-believed-but-supported |
-| Not scored | 9 — `NO EVIDENCE FOUND`, nothing for belief to agree with |
+| Claims reaching a clear majority | 33 — these form the matrix |
+| No clear majority | 5 — neither side passed 50% of directional answers |
+| IDK-dominant | 12 — 30%+ of the full sample could not answer |
+| Match | 23 — the majority position agrees with the evidence |
+| **Mismatch** | **5** — 4 agreed-but-contradicted, 1 disagreed-but-supported |
+| Not scored | 5 — `NO EVIDENCE FOUND`, nothing for belief to agree with |
 | Significant subgroup differences | 5 of 300 tests, after Benjamini-Hochberg |
 | Bimodal claims | 2 — CLM-000026, CLM-000581 |
 | Free-text comments | 5,590 |
 
-Quote **12 / 41**, never 12 / 50 — the 9 unscored claims are not in the denominator.
+Quote **5 / 28**, never 5 / 50. The denominator is the scored claims only: 17 of
+the 50 never reach the matrix (5 mixed, 12 IDK-dominant), and 5 more carry
+`NO EVIDENCE FOUND`, which cannot be scored either way.
+
+Across all 50 claims the RQ2 review labelled **32 SUPPORTED**, **10 CONTRADICTED**
+and **8 NO EVIDENCE FOUND**.
 
 ### Three things worth stating in the write-up
 
-**The disbelief column is mostly absence of belief, not rejection.** 8 of the 9
-not-believed-but-supported claims sit at median exactly 3.0 — "neither agree nor
-disagree". Only CLM-000007 (median 2) is genuine disagreement.
+**Belief mostly tracks the evidence.** 23 of 28 scored claims match. The five that
+do not are the finding: CLM-000045, CLM-000085, CLM-000169 and CLM-000496 are
+agreed with despite being contradicted; CLM-000007 is disagreed with despite being
+supported.
 
-**Some medians rest on a shrinking subset.** 12 claims have an IDK rate ≥ 25%;
-CLM-000374 reaches 64.5%. Their medians describe the people who felt able to
-answer, not the sample.
+**Two claims sit marginally inside the matrix and should be reported as such.**
+CLM-000085 clears the 50% line by two respondents (329 / 654 = 50.31%) and is one
+of the five mismatches; CLM-000337 clears it by four (326 / 644 = 50.62%) and is a
+match. A handful of different answers would move either into the mixed bucket.
 
-**Only 5 subgroup differences survive correction**, 4 of them on *industry*.
-Three more were significant at n=743 and dropped out at n=751 — they were noise
-at the threshold, not findings.
+**`NO EVIDENCE FOUND` is a finding, not a null result.** 8 claims are presented as
+guidance in practitioner literature yet are unaddressed by the empirical
+literature. Four of them command a clear majority. Those point directly at where
+future work would be useful, which is why they keep their own column rather than
+being folded into the mismatch count.
+
+**A shrinking denominator is reported, never hidden.** 12 claims are IDK-dominant
+and excluded from the matrix; CLM-000374 reaches 64.6%. Their directional split
+would describe a self-selected minority, so the tool refuses to classify them.
 
 ---
 
@@ -66,11 +84,11 @@ flowchart TB
 
     subgraph pipeline ["Six-stage pipeline"]
         direction TB
-        S1["<b>1 · Descriptives</b><br/>median (ordinal, never mean)<br/>+ bimodality flag"]
+        S1["<b>1 · Descriptives</b><br/>ordinal summaries, never a mean<br/>+ bimodality flag"]
         S2["<b>2 · Subgroup tests</b><br/>Mann-Whitney U / Kruskal-Wallis H<br/>min subgroup size 10"]
         S3["<b>3 · Effect size</b><br/>rank-biserial r · ε²<br/>on every test, not just significant"]
         S4["<b>4 · BH correction</b><br/>per demographic family of 50<br/>never pooled"]
-        S5["<b>5 · Belief-evidence matrix</b>"]
+        S5["<b>5 · Belief-evidence matrix</b><br/>majority % of directional answers<br/>IDK-dominance checked first"]
         S6["<b>6 · Comment triage</b><br/>retrieval + priority<br/><i>coding stays human</i>"]
         S1 --> S2 --> S3 --> S4 --> S5 --> S6
     end
@@ -93,6 +111,23 @@ The evidence gate exists because claim IDs are *not* unique in the 4,091-claim
 corpus — a handed-over summary workbook carried labels reasoned against the
 wrong claim for 27 of 50 rows, and the gate caught every one.
 
+### Stage 5, in full
+
+Every claim lands in exactly one of three buckets, evaluated in this order:
+
+1. **IDK-dominant** — 30% or more of the *full sample* (IDK included) answered
+   "I don't know". The claim is reported on its own terms and never classified.
+   This test runs first and short-circuits the rest.
+2. **Clear direction** — more than 50% of the *directional* denominator (the five
+   substantive Likert points, IDK excluded) fell on one side. Neutral answers
+   count toward the denominator but toward neither side. The claim enters the
+   matrix as **Majority agreed** or **Majority disagreed**.
+3. **Mixed** — neither side passed 50%. An exact 50/50 split is mixed, not a
+   majority; the rule is strictly greater than.
+
+Only clear-direction claims enter the matrix. A claim is a **mismatch** when the
+majority agreed with a `CONTRADICTED` claim, or disagreed with a `SUPPORTED` one.
+
 ---
 
 ## Run it
@@ -106,6 +141,7 @@ wrong claim for 27 of 50 rows, and the gate caught every one.
 |---|---|
 | `/` | All 50 claims — sortable, filterable |
 | `/matrix` | **The belief–evidence matrix** |
+| `/conclusions` | The findings, presentation-ready |
 | `/claims/CLM-000062` | Full audit trail for one claim (see below) |
 | `/quality` | Dataset in use, flagged respondents, every exclusion |
 | `/methodology` | Every config value that shaped the numbers |
@@ -113,7 +149,7 @@ wrong claim for 27 of 50 rows, and the gate caught every one.
 Other commands:
 
 ```bash
-./run.sh test                                  # 162 tests
+./run.sh test                                  # 182 tests
 ./run.sh pipeline --input "data/raw/new.xlsx"  # run against another export
 python -m rq3.cli evidence <workbook> --write  # import RQ2 labels
 ```
@@ -148,7 +184,8 @@ The walkthrough is not a re-creation for display — it *is* the computation.
 
 | Choice | Why | Source |
 |---|---|---|
-| Median, not mean | Likert items are ordinal | Wohlin et al. (2012); Allen & Seaman (2007) |
+| Ordinal summaries, not means | Likert items are ordinal | Wohlin et al. (2012); Allen & Seaman (2007) |
+| Majority % on a directional denominator | reports the direction people took, without imputing a number to IDK | — |
 | Mann-Whitney / Kruskal-Wallis | nonparametric for ordinal outcomes | Kitchenham et al. (2017) |
 | Rank-biserial r | reported for every test, with auditable pair counts | Kerby (2014) |
 | \|r\| bands .14 / .33 / .47 | small / medium / large | Romano et al. (2006) |
@@ -158,8 +195,9 @@ The walkthrough is not a re-creation for display — it *is* the computation.
 
 **Rules that never bend:**
 
-- **IDK** is never numeric and never imputed — excluded from every median and
-  test, with its rate reported separately per claim *and* per subgroup.
+- **IDK** is never numeric and never imputed — excluded from the directional
+  denominator and from every test, with its rate reported separately per claim
+  *and* per subgroup.
 - **Nothing fails silently.** Anything not analysed appears as an explicit
   exclusion with a reason. 1,888 exclusions are logged in this run.
 - **Flag, never auto-exclude.** 3 respondents are flagged (including a 50×IDK
@@ -176,12 +214,16 @@ run manifest and the Methodology panel.
 
 | Key | Value | Note |
 |---|---|---|
-| `belief.threshold` | `3.5` | **Pending supervisor sign-off.** No claim is within the borderline band, so changing it moves nothing. |
-| `belief.borderline_delta` | `0.2` | flags provisional cell placement |
-| `comparisons.min_subgroup_size` | `10` | was 3 — flagged as a bug and fixed |
-| `descriptives.high_idk_rate_pct` | `25.0` | IDK review flag |
-| `evidence.min_text_similarity` | `0.60` | the claim-identity gate |
+| `belief.idk_dominance.threshold` | `0.30` | share of the **full sample** answering IDK that removes a claim from the matrix; evaluated first |
+| `belief.majority.threshold` | `0.50` | share of the **directional** denominator one side must exceed; strictly greater than |
 | `belief.unscored_labels` | `NO EVIDENCE FOUND` | excluded from match/mismatch |
+| `comparisons.min_subgroup_size` | `10` | was 3 — flagged as a bug and fixed |
+| `evidence.min_text_similarity` | `0.60` | the claim-identity gate |
+| `experience_split` | 153 / 598 | Under 10 years vs 10+ years |
+
+There is **no median threshold**. An earlier draft classified claims by median
+≥ 3.5; that rule was replaced by the percentage majority rule above, and the
+`belief.threshold` and `belief.borderline_delta` keys were removed entirely.
 
 Evidence labels are **three categories only**. Strength qualifiers
 (`SUPPORTED (weak evidence)`, `SUPPORTED / WEAK EVIDENCE`, …) collapse onto the
@@ -199,13 +241,19 @@ backend/rq3/
   decode.py              BTHSurvey export → tidy table
   claims.py  evidence.py claim metadata · RQ2 label import + gate
   quality.py             low-effort / duplicate screening
-  analysis/              stages 1–6, one module each
+  analysis/
+    descriptives.py      stage 1
+    comparisons.py       stage 2      effects.py   stage 3
+    correction.py        stage 4      buckets.py   stage 5 bucketing
+    matrix.py            stage 5      comments.py  stage 6
+    experience.py        two-group experience analysis
   pipeline.py  api.py    orchestration · FastAPI
+  scripts/               standalone provenance checks
 frontend/src/            React + TypeScript + Vite + Recharts
 data/
   claims.csv             GENERATED — safe to rebuild
   claims_evidence.csv    RQ2 labels — hand-maintained
-  source/                Final_50_Claims.xlsx
+  source/                Final_50_Claims.xlsx and the RQ2 label workbooks
   raw/ processed/        respondent-level — NOT in Git
   results/<run_id>/      aggregate exports + manifest
 ```
@@ -231,4 +279,7 @@ being in the repository.
 - **Fixed question order.** BTHSurvey has no randomisation; order effects can't
   be estimated. Documented, not corrected.
 - **Country is thin.** Only 8 of 42 countries reach n ≥ 10, with 56 respondents
-  not answering — which is why country yields no significant results.
+  not answering. The pipeline still runs the 50 country tests and exports them;
+  none survives BH correction. The thesis excludes country from subgroup
+  reporting on sample-concentration grounds, so the exported country results
+  should not be read as a reported finding.

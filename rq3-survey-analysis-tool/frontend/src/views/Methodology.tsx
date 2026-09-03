@@ -20,18 +20,28 @@ export function Methodology() {
   return (
     <>
       <Caveat caveats={m.caveats} extra={
-        <p><strong>Belief threshold.</strong> {m.belief_threshold_status} — currently{' '}
-          {c.belief.threshold}, read from <code>{m.config_path}</code> and defined nowhere else
-          in the codebase.</p>} />
+        <p><strong>Belief classification.</strong> Claims are bucketed by the direction a
+          majority took, not by a median. A claim is IDK-dominant when{' '}
+          {(c.belief.idk_dominance.threshold * 100).toFixed(0)}% or more of the full sample
+          answered "I don't know" — checked first, and it removes the claim from the matrix.
+          Otherwise a side must exceed {(c.belief.majority.threshold * 100).toFixed(0)}% of the
+          directional answers (IDK excluded) for the claim to count as a clear direction. Both
+          values are read from <code>{m.config_path}</code> and defined nowhere else in the
+          codebase.</p>} />
 
       <div className="card">
         <header><h2>Configuration in force for this run</h2>
           <span className="sub">{m.config_path}</span></header>
         <dl className="kv">
-          <dt>Belief threshold</dt>
-          <dd>{c.belief.threshold} — median ≥ this counts as "widely believed" ({m.belief_threshold_status})</dd>
-          <dt>Borderline band</dt>
-          <dd>± {c.belief.borderline_delta} around the threshold flags a claim for manual review</dd>
+          <dt>IDK-dominance threshold</dt>
+          <dd>{(c.belief.idk_dominance.threshold * 100).toFixed(0)}% of the full sample (IDK
+              included) — at or above this the claim is reported on its own terms and never
+              classified. Evaluated before the majority rule and short-circuits it</dd>
+          <dt>Majority threshold</dt>
+          <dd>more than {(c.belief.majority.threshold * 100).toFixed(0)}% of the directional
+              denominator (the five substantive Likert points, IDK excluded). Strictly greater
+              than: an exact 50/50 split is mixed, not a majority. Neutral answers count toward
+              the denominator but toward neither side</dd>
           <dt>Minimum subgroup size</dt>
           <dd>{c.comparisons.min_subgroup_size} valid (non-IDK) answers; smaller subgroups are
               excluded from that comparison and logged</dd>
@@ -72,6 +82,65 @@ export function Methodology() {
       </div>
 
       <div className="card">
+        <header>
+          <h2>Tests actually run</h2>
+          <span className="sub">
+            what this dataset produced — not what the pipeline is capable of
+          </span>
+        </header>
+        <dl className="kv">
+          <dt>Comparisons</dt>
+          <dd>{m.tests_run.n_run} run of {m.tests_run.n_attempted} attempted
+              (50 claims × {Object.keys(m.tests_run.subgroups_per_variable).length} demographic variables)</dd>
+          <dt>Kruskal–Wallis H</dt>
+          <dd><strong>{m.tests_run.by_test.kruskal_wallis}</strong> omnibus tests</dd>
+          <dt>Mann–Whitney U</dt>
+          <dd>
+            <strong>{m.tests_run.by_test.mann_whitney_u}</strong> omnibus tests
+            {m.tests_run.by_test.mann_whitney_u === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+                No two-group comparison arose: {Object.entries(m.tests_run.subgroups_per_variable)
+                  .map(([v, n]) => `${v.replace(/_/g, ' ')} ${n}`).join(' · ')} subgroups
+                cleared the minimum size, so every omnibus test was Kruskal–Wallis.
+              </div>
+            )}
+          </dd>
+          <dt>Effect size, omnibus</dt>
+          <dd>
+            ε² on {m.tests_run.n_epsilon_squared_omnibus} tests ·
+            rank-biserial on {m.tests_run.n_rank_biserial_omnibus}
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+              Rank-biserial is undefined for three or more groups, so the omnibus
+              results carry ε² (Tomczak &amp; Tomczak 2014). Computed for every test,
+              not only the {m.tests_run.n_significant_omnibus} that survived correction.
+            </div>
+          </dd>
+          <dt>Pairwise follow-ups</dt>
+          <dd>
+            {m.tests_run.n_pairwise} Mann–Whitney tests, all carrying Kerby&rsquo;s
+            rank-biserial; {m.tests_run.n_pairwise_significant} significant after
+            correction within their claim
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+              Run only where a Kruskal–Wallis omnibus survived Benjamini–Hochberg.
+            </div>
+          </dd>
+          <dt>Significant after BH</dt>
+          <dd><strong>{m.tests_run.n_significant_omnibus}</strong> of {m.tests_run.n_run} omnibus tests</dd>
+        </dl>
+        <p style={{ margin: '14px 0 0', fontSize: 12.5, lineHeight: 1.6,
+                    color: 'var(--text-secondary)' }}>
+          {m.tests_run.note}
+        </p>
+        <p style={{ margin: '10px 0 0', fontSize: 12.5, lineHeight: 1.6,
+                    color: 'var(--text-secondary)' }}>
+          <strong>These tests answer a secondary question</strong> — whether belief
+          varies by who the respondent is. The belief–evidence classification itself
+          is descriptive: a median per claim, cross-tabulated against the RQ2 label.
+          No hypothesis test contributes to it.
+        </p>
+      </div>
+
+      <div className="card">
         <header><h2>Why each statistical choice</h2>
           <span className="sub">the same citations sit in code comments beside the functions</span></header>
         <div className="table-wrap">
@@ -97,9 +166,11 @@ export function Methodology() {
             {m.caveats.question_order}</li>
           <li style={{ marginBottom: 6 }}><strong>Purposive sampling.</strong>{' '}
             {m.caveats.sampling}</li>
-          <li style={{ marginBottom: 6 }}><strong>Belief threshold not finalised.</strong>{' '}
-            {m.belief_threshold_status}. Any claim near the cutoff is flagged borderline rather
-            than presented as classified.</li>
+          <li style={{ marginBottom: 6 }}><strong>A majority is a cutoff, not a margin.</strong>{' '}
+            A claim clearing 50% of the directional answers by a handful of respondents is
+            placed in the same cell as one clearing it by hundreds. The winning percentage and
+            the directional denominator are shown on every claim so a marginal placement can be
+            read off directly.</li>
           {m.manifest.notes.map((n, i) => <li key={i} style={{ marginBottom: 6 }}>{n}</li>)}
         </ul>
       </div>

@@ -30,26 +30,32 @@ export interface ClaimRow {
   n_idk: number
   idk_rate_pct: number
   high_idk: boolean
-  median: number | null
-  mode: string
-  iqr: number | null
-  pct_disagree_1_2: number | null
-  pct_neutral_3: number | null
-  pct_agree_4_5: number | null
+  bucket: 'clear_direction' | 'mixed' | 'idk_dominant'
+  full_sample_n: number
+  directional_denominator: number
+  pct_agree: number | null
+  pct_disagree: number | null
+  pct_neutral: number | null
+  majority_direction: 'agreed' | 'disagreed' | 'none' | null
+  belief_label: string | null
+  bucket_reason: string
+  in_matrix: boolean
+  verdict_status: string
+  experience_group_1_n: number | null
+  experience_group_2_n: number | null
+  mannwhitney_p_raw: number | null
+  mannwhitney_p_corrected: number | null
+  significant_after_correction: boolean
+  effect_size: number | null
+  effect_magnitude: string | null
+  role_breakdown: string
   freq_1: number; freq_2: number; freq_3: number; freq_4: number; freq_5: number
   bimodal: boolean
-  bimodality_coefficient: number | null
-  evidence_label: string
-  evidence_strength: string
-  scored: boolean
-  belief_class: string
-  borderline: boolean
+  evidence_label: string | null
+  evidence_strength: string | null
   belief_evidence_mismatch: boolean
   mismatch_kind: string | null
-  significant_variables: string
   n_comments: number
-  excluded: boolean
-  exclusion_reason: string | null
 }
 
 export interface Overview {
@@ -58,7 +64,7 @@ export interface Overview {
   claims: ClaimRow[]
   summary: {
     n_respondents: number; n_claims: number; n_comments: number
-    n_bimodal: number; n_borderline: number; n_mismatch: number
+    n_bimodal: number; bucket_counts: Record<string, number>; n_mismatch: number
     n_match: number; n_not_scored: number; n_scored: number
     n_pending_evidence: number; n_flagged_respondents: number
     n_excluded_comparisons: number; n_excluded_subgroups: number
@@ -154,18 +160,25 @@ export interface Descriptives {
   bimodal: boolean; bimodality_reason: string
   bimodality_coefficient: number | null
   bimodality: BimodalityAssessment
-  high_idk: boolean; high_idk_threshold_pct: number
   excluded: boolean; exclusion_reason: string | null; notes: string[]
 }
 
 export interface Classification {
-  claim_id: string; median: number | null; belief_class: string
-  evidence_label: string; borderline: boolean
-  distance_from_threshold: number | null
+  claim_id: string
+  evidence_label: string
   mismatch: boolean; mismatch_kind: string | null
-  n_valid: number; idk_rate: number
+  bucket: string
+  belief_label: string | null
+  majority_direction: string | null
+  pct_agree: number | null
+  pct_disagree: number | null
+  pct_neutral: number | null
+  directional_n: number
+  full_sample_n: number
+  idk_rate: number
+  in_matrix: boolean
   evidence_strength: string
-  verdict_status: 'match' | 'mismatch' | 'not_scored' | 'pending' | 'unclassifiable'
+  verdict_status: 'match' | 'mismatch' | 'not_scored' | 'pending' | 'excluded'
   verdict: string
   reason: string | null
 }
@@ -190,9 +203,8 @@ export interface ClaimDetail {
   likert_labels: Record<string, string>
   idk_label: string
   min_subgroup_size: number
-  belief_threshold: number
-  belief_threshold_status: string
-  borderline_delta: number
+  majority_threshold: number
+  idk_dominance_threshold: number
   pending_label: string
   effect_size_thresholds: { small: number; medium: number; large: number }
   caveats: Caveats
@@ -200,14 +212,18 @@ export interface ClaimDetail {
 
 export interface MatrixCell {
   belief_class: string; evidence_label: string; count: number
-  claim_ids: string[]; borderline_claim_ids: string[]
+  claim_ids: string[]
 }
 
 export interface Matrix {
-  threshold: number; borderline_delta: number; threshold_status: string
+  idk_dominance_threshold: number
+  majority_threshold: number
+  bucket_counts: Record<string, number>
+  excluded_mixed: string[]
+  excluded_idk_dominant: string[]
   belief_classes: string[]; evidence_labels: string[]
   cells: MatrixCell[]; classifications: Classification[]
-  n_borderline: number; n_pending_evidence: number; n_mismatch: number
+  n_pending_evidence: number; n_mismatch: number
   n_match: number; n_not_scored: number; n_scored: number
   notes: string[]
 }
@@ -241,12 +257,25 @@ export interface QualityPayload {
   caveats: Caveats
 }
 
+export interface TestsRun {
+  n_attempted: number; n_run: number
+  by_test: { mann_whitney_u: number; kruskal_wallis: number }
+  n_rank_biserial_omnibus: number
+  n_epsilon_squared_omnibus: number
+  n_pairwise: number
+  n_pairwise_rank_biserial: number
+  n_pairwise_significant: number
+  n_significant_omnibus: number
+  subgroups_per_variable: Record<string, number>
+  note: string
+}
+
 export interface Methodology {
   config: Record<string, any>
+  tests_run: TestsRun
   config_path: string
   manifest: Manifest
   caveats: Caveats
-  belief_threshold_status: string
   citations: { stage: string; why: string; source: string }[]
 }
 

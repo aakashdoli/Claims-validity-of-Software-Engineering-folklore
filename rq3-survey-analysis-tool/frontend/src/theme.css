@@ -316,3 +316,148 @@ pre.config {
 }
 .tooltip .t-title { font-weight: 600; margin-bottom: 3px; color: var(--text-primary); }
 .tooltip .t-row { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* =============================================================================
+   Conclusions view — the findings, presentation-clean.
+
+   Colour job is POLARITY (agrees / disagrees with the evidence), so it reuses
+   the validated diverging poles already in use for the Likert scale, not a
+   green/red status pair — green vs red measures OKLab dE 4.1 under deuteranopia
+   and is a hard fail. Every mark also carries a direct label.
+   ============================================================================= */
+:root {
+  --concl-match:    #1c5cab;   /* agrees with the evidence — blue pole */
+  --concl-mismatch: #a32b28;   /* disagrees — red pole */
+  --concl-neutral:  #898781;   /* not scored / de-emphasis */
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --concl-match:    #3987e5;
+    --concl-mismatch: #e66767;
+    --concl-neutral:  #898781;
+  }
+}
+:root[data-theme='dark'] {
+  --concl-match:    #3987e5;
+  --concl-mismatch: #e66767;
+  --concl-neutral:  #898781;
+}
+
+.cc { max-width: 940px; margin: 0 auto; padding: 8px 0 80px; }
+
+.cc-title { padding: 28px 0 12px; }
+.cc-kicker { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.14em;
+             text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+.cc-title h1 { font-size: 34px; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 10px; }
+.cc-sub { margin: 0; color: var(--text-secondary); font-size: 14px;
+          font-variant-numeric: tabular-nums; }
+
+.cc-section { padding: 34px 0; border-top: 1px solid var(--gridline); }
+.cc-head { display: flex; gap: 16px; align-items: baseline; margin-bottom: 22px; }
+.cc-num { font-size: 12px; font-weight: 600; color: var(--text-muted);
+          font-variant-numeric: tabular-nums; padding-top: 4px; min-width: 16px; }
+.cc-section h2 { font-size: 22px; line-height: 1.3; letter-spacing: -0.015em; margin: 0; }
+.cc-lede { margin: 7px 0 0; color: var(--text-secondary); font-size: 14.5px; line-height: 1.5; }
+.cc-body { margin: 18px 0 0; color: var(--text-secondary); font-size: 14.5px;
+           line-height: 1.6; max-width: 74ch; }
+
+/* hero figure — exactly one per view, proportional figures */
+.cc-hero { display: flex; gap: 28px; align-items: flex-start; margin-bottom: 26px;
+            flex-wrap: wrap; }
+.cc-hero .fig { font-size: 76px; font-weight: 600; line-height: 1;
+                letter-spacing: -0.03em; color: var(--concl-mismatch); white-space: nowrap;
+                display: flex; flex-direction: column; }
+.cc-hero .fig .of { font-size: 15px; font-weight: 400; line-height: 1;
+                    letter-spacing: 0; color: var(--text-muted); margin-top: 6px; }
+.cc-hero p { margin: 0; padding-top: 6px; flex: 1 1 320px; font-size: 15.5px; line-height: 1.6;
+             color: var(--text-secondary); }
+.cc-hero strong { color: var(--text-primary); }
+
+/* part-to-whole: 2px surface gaps, never borders */
+.cc-split { display: flex; height: 46px; margin-bottom: 14px; }
+.cc-split .seg { display: flex; align-items: center; justify-content: center;
+                 position: relative; }
+.cc-split .seg + .seg { margin-left: 2px; }
+.cc-split .seg:first-child { border-radius: 4px 0 0 4px; }
+.cc-split .seg:last-child { border-radius: 0 4px 4px 0; }
+.cc-split .seg-n { color: #fff; font-size: 15px; font-weight: 600; }
+.cc-legend { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13px;
+             color: var(--text-secondary); }
+.cc-legend .item { display: inline-flex; align-items: center; gap: 7px; }
+.cc-legend strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.cc-legend .sw { width: 11px; height: 11px; border-radius: 2px; flex: 0 0 auto; }
+
+/* matrix */
+.cc-matrix { display: grid; gap: 8px; }
+.cc-mh { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+         color: var(--text-muted); font-weight: 600; align-self: end; padding: 0 2px 4px; }
+.cc-rh { font-size: 13px; color: var(--text-secondary); align-self: center; padding-right: 8px; }
+.cc-cell { background: var(--surface-1); border: 1px solid var(--border);
+           border-radius: 6px; padding: 16px 14px; min-height: 84px;
+           display: flex; flex-direction: column; justify-content: center; gap: 7px; }
+.cc-cell .n { font-size: 30px; font-weight: 600; line-height: 1; }
+.cc-cell.zero .n { color: var(--text-muted); font-weight: 400; }
+.cc-cell.bad { border-color: var(--concl-mismatch); border-left-width: 3px; }
+.cc-cell.bad .n { color: var(--concl-mismatch); }
+.cc-cell .tag { font-size: 11px; color: var(--concl-mismatch); font-weight: 600; }
+
+/* claim rows with a magnitude bar */
+.cc-claims { display: flex; flex-direction: column; gap: 18px; }
+.cc-claim-txt { font-size: 14.5px; line-height: 1.5; margin-bottom: 8px; }
+.cc-claim-txt .id, .cc-row-txt .id, .cc-gap-txt .id { font-size: 11px; color: var(--text-muted);
+    font-variant-numeric: tabular-nums; margin-right: 9px; white-space: nowrap; }
+.cc-claim-bar { display: flex; align-items: center; gap: 12px; }
+.cc-claim-bar .track { flex: 1; height: 12px; background: var(--surface-3);
+                       border-radius: 4px; overflow: hidden; }
+.cc-claim-bar .fill { height: 100%; background: var(--concl-mismatch); border-radius: 4px; }
+.cc-claim-bar .val { font-size: 15px; font-weight: 600; min-width: 46px;
+                     text-align: right; font-variant-numeric: tabular-nums; }
+.cc-note { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); }
+
+/* compact evidence rows */
+.cc-list { display: flex; flex-direction: column; gap: 11px; margin-top: 18px; }
+.cc-row { display: flex; gap: 13px; align-items: baseline; }
+.cc-pill { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+           white-space: nowrap; flex: 0 0 auto; font-variant-numeric: tabular-nums;
+           background: color-mix(in srgb, var(--concl-mismatch) 13%, transparent);
+           color: var(--concl-mismatch); }
+.cc-pill.quiet { background: var(--surface-3); color: var(--text-secondary);
+                 text-transform: capitalize; }
+.cc-row-txt { font-size: 13.5px; line-height: 1.5; color: var(--text-secondary); }
+
+.cc-two { display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: 34px;
+          align-items: start; }
+.cc-stat .v { font-size: 50px; font-weight: 600; line-height: 1; letter-spacing: -0.02em; }
+.cc-stat .v .of { display: block; font-size: 14px; font-weight: 400;
+                  color: var(--text-muted); margin-top: 7px; letter-spacing: 0; }
+.cc-stat p { margin: 14px 0 0; font-size: 13.5px; line-height: 1.55;
+             color: var(--text-secondary); }
+
+.cc-caveats { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+              gap: 28px; }
+.cc-caveats h3 { font-size: 15px; margin: 0 0 8px; }
+.cc-caveats p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--text-secondary); }
+.cc-fine { margin: 26px 0 0; font-size: 11.5px; line-height: 1.55; color: var(--text-muted);
+           max-width: 88ch; }
+
+@media (max-width: 760px) {
+  .cc-two { grid-template-columns: 1fr; gap: 22px; }
+  .cc-title h1 { font-size: 27px; }
+  .cc-hero .fig { font-size: 58px; }
+}
+
+/* research-gap rows — NO EVIDENCE FOUND presented as a finding, not a remainder */
+.cc-gap { display: flex; flex-direction: column; gap: 2px; margin-top: 20px; }
+.cc-gap-row { display: grid; grid-template-columns: 132px 1fr; gap: 18px;
+              padding: 13px 14px; border-radius: 6px; align-items: start;
+              background: var(--surface-1); border: 1px solid var(--border); }
+.cc-gap-row.confident { border-left: 3px solid var(--concl-match); }
+.cc-gap-nums { display: flex; flex-direction: column; gap: 1px; }
+.cc-gap-nums .agree { font-size: 21px; font-weight: 600; line-height: 1.1;
+                      font-variant-numeric: tabular-nums; }
+.cc-gap-nums .lbl { font-size: 11px; color: var(--text-muted); }
+.cc-gap-nums .idk { font-size: 11.5px; color: var(--text-muted); margin-top: 3px;
+                    font-variant-numeric: tabular-nums; }
+.cc-gap-txt { font-size: 14px; line-height: 1.55; color: var(--text-secondary); }
+.cc-flag { display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 600;
+           color: var(--concl-match); white-space: nowrap; }

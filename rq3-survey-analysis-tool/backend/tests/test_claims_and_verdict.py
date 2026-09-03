@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from rq3.analysis.descriptives import describe_claim
+from rq3.analysis.buckets import classify_all
 from rq3.analysis.matrix import build_matrix
 from rq3.claims import MISSING, ClaimsError, build_claims_csv, load_claims
 from rq3.config import PROJECT_ROOT
@@ -105,7 +106,7 @@ def _claims(claim_id: str, label: str) -> pd.DataFrame:
     return pd.DataFrame([{
         "q_number": 1, "claim_id": claim_id, "claim_type": "NORMATIVE",
         "book": "b", "author": MISSING, "source_text": "s",
-        "evidence_label": label, "evidence_notes": "",
+        "evidence_label": label, "evidence_strength": "", "evidence_notes": "",
     }])
 
 
@@ -116,41 +117,45 @@ def _series(counts: dict[str, int]) -> pd.Series:
     return pd.Series(out)
 
 
+def _verdict_of(counts: dict[str, int], label: str, cfg):
+    ds = [describe_claim("C1", _series(counts), cfg)]
+    return build_matrix(classify_all(ds, cfg), _claims("C1", label), cfg).classifications[0]
+
+
+AGREE = {"4": 70, "1": 30}
+DISAGREE = {"1": 70, "4": 30}
+
+
 def test_verdict_is_pending_while_rq2_is_unfilled(cfg):
-    d = describe_claim("C1", _series({"5": 100}), cfg)
-    k = build_matrix([d], _claims("C1", "PENDING"), cfg).classifications[0]
+    k = _verdict_of(AGREE, "PENDING", cfg)
     assert k.verdict_status == "pending"
-    assert "PENDING" in k.verdict
-    assert "No verdict yet" in k.verdict
-    # No match/mismatch word may appear in a pending verdict.
+    assert "PENDING" in k.verdict and "No verdict yet" in k.verdict
     assert "MISMATCH" not in k.verdict and "MATCH" not in k.verdict
 
 
 def test_verdict_states_a_mismatch_plainly(cfg):
-    d = describe_claim("C1", _series({"5": 100}), cfg)
-    k = build_matrix([d], _claims("C1", "CONTRADICTED"), cfg).classifications[0]
+    k = _verdict_of(AGREE, "CONTRADICTED", cfg)
     assert k.verdict_status == "mismatch"
     assert k.verdict.startswith("MISMATCH")
     assert "CONTRADICTED" in k.verdict
-    assert "median 5" in k.verdict
+    assert "majority agreed" in k.verdict.lower()
 
 
 def test_verdict_states_a_match_plainly(cfg):
-    d = describe_claim("C1", _series({"5": 100}), cfg)
-    k = build_matrix([d], _claims("C1", "SUPPORTED"), cfg).classifications[0]
+    k = _verdict_of(AGREE, "SUPPORTED", cfg)
     assert k.verdict_status == "match"
     assert k.verdict.startswith("MATCH")
 
 
-def test_verdict_flags_a_provisional_borderline_placement(cfg):
-    d = describe_claim("C1", _series({"3": 50, "4": 50}), cfg)   # median 3.5
-    k = build_matrix([d], _claims("C1", "SUPPORTED"), cfg).classifications[0]
-    assert k.borderline is True
-    assert "provisional" in k.verdict
+def test_verdict_names_the_direction_and_the_share(cfg):
+    k = _verdict_of(DISAGREE, "CONTRADICTED", cfg)
+    assert "disagreed" in k.verdict
+    assert "70%" in k.verdict
+    assert "100 directional answers" in k.verdict
 
 
-def test_verdict_for_an_unclassifiable_claim(cfg):
-    d = describe_claim("C1", pd.Series(["IDK"] * 60), cfg)
-    k = build_matrix([d], _claims("C1", "SUPPORTED"), cfg).classifications[0]
-    assert k.verdict_status == "unclassifiable"
-    assert "No verdict" in k.verdict
+def test_verdict_for_an_excluded_claim(cfg):
+    k = _verdict_of({"IDK": 60, "4": 40}, "SUPPORTED", cfg)
+    assert k.verdict_status == "excluded"
+    assert "NOT CLASSIFIED" in k.verdict
+    assert k.in_matrix is False

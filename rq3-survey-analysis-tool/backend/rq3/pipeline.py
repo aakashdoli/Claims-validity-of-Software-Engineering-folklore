@@ -28,11 +28,13 @@ import pandas as pd
 import scipy
 import statsmodels
 
+from .analysis.buckets import ClaimBucket, classify_all, role_breakdown
 from .analysis.comments import ClaimComments, collect_comments
 from .analysis.comparisons import (ComparisonResult, Exclusion, compare_claim,
                                    run_pairwise)
 from .analysis.correction import FamilySummary, apply_bh, apply_bh_pairwise
 from .analysis.descriptives import ClaimDescriptives, describe_all
+from .analysis.experience import ExperienceFamily, compare as compare_experience
 from .analysis.matrix import BeliefEvidenceMatrix, build_matrix
 from .claims import load_claims
 from .config import Config, load_config
@@ -74,6 +76,9 @@ class RunResult:
     families: list[FamilySummary]
     exclusions: list[Exclusion]
     matrix: BeliefEvidenceMatrix
+    buckets: list[ClaimBucket]
+    experience: ExperienceFamily
+    role_breakdowns: dict[str, list[dict[str, Any]]]
     comments: list[ClaimComments]
     quality: QualityReport
     clean_csv: str
@@ -89,6 +94,9 @@ class RunResult:
             "correction_families": [f.to_dict() for f in self.families],
             "exclusions": [e.to_dict() for e in self.exclusions],
             "belief_evidence_matrix": self.matrix.to_dict(),
+            "buckets": [b.to_dict() for b in self.buckets],
+            "experience": self.experience.to_dict(),
+            "role_breakdowns": self.role_breakdowns,
             "comments": [c.to_dict() for c in self.comments],
             "quality": self.quality.to_dict(),
             "clean_csv": self.clean_csv,
@@ -157,8 +165,26 @@ def run(cfg: Config | None = None, input_file: str | Path | None = None) -> RunR
                                   responses[c.variable], c.variable, included, cfg)
         apply_bh_pairwise(c.pairwise, cfg)
 
+    # -- Stage 2b: the two-group experience comparison ------------------------
+    # Its own family of 50 p-values, corrected together. Separate from the
+    # per-variable Kruskal-Wallis families above.
+    experience = compare_experience(responses, claim_ids, cfg)
+
     # -- Stage 5 -------------------------------------------------------------
-    matrix = build_matrix(descriptives, claims, cfg)
+    # Buckets first (IDK dominance, then the majority rule), then the matrix
+    # over the clear_direction claims only.
+    buckets = classify_all(descriptives, cfg)
+    matrix = build_matrix(buckets, claims, cfg)
+
+    # Descriptive role breakdown, clear_direction claims only. No test: role
+    # has too many categories for a two-group comparison.
+    role_var = str(cfg.get("experience_split.descriptive_variable"))
+    role_breakdowns: dict[str, list[dict[str, Any]]] = {}
+    if role_var in responses.columns:
+        for b in buckets:
+            if b.bucket == "clear_direction":
+                role_breakdowns[b.claim_id] = role_breakdown(
+                    responses[b.claim_id], responses[role_var], cfg)
 
     # -- Stage 6 -------------------------------------------------------------
     comments = collect_comments(decoded.comments, descriptives, comparisons,
@@ -191,7 +217,9 @@ def run(cfg: Config | None = None, input_file: str | Path | None = None) -> RunR
     return RunResult(
         manifest=manifest, claims=claims, survey_text=decoded.survey_text,
         descriptives=descriptives, comparisons=comparisons, families=families,
-        exclusions=exclusions, matrix=matrix, comments=comments, quality=quality,
+        exclusions=exclusions, matrix=matrix, buckets=buckets,
+        experience=experience, role_breakdowns=role_breakdowns,
+        comments=comments, quality=quality,
         clean_csv=str(clean_csv), comments_csv=str(comments_csv),
     )
 
@@ -201,62 +229,146 @@ def run(cfg: Config | None = None, input_file: str | Path | None = None) -> RunR
 # ---------------------------------------------------------------------------
 
 def results_table(result: RunResult, cfg: Config) -> pd.DataFrame:
-    """The per-claim overview table — the sortable grid in the frontend."""
+    """The per-claim output table, exactly as specified for the write-up."""
     ev = dict(zip(result.claims["claim_id"], result.claims["evidence_label"]))
     strength = dict(zip(result.claims["claim_id"], result.claims["evidence_strength"]))
     book = dict(zip(result.claims["claim_id"], result.claims["book"]))
-    author = dict(zip(result.claims["claim_id"], result.claims["author"]))
     qnum = dict(zip(result.claims["claim_id"], result.claims["q_number"]))
     ctype = dict(zip(result.claims["claim_id"], result.claims["claim_type"]))
     cls = {c.claim_id: c for c in result.matrix.classifications}
+    bkt = {b.claim_id: b for b in result.buckets}
+    exp = {r.claim_id: r for r in result.experience.results}
     ncomments = {c.claim_id: c.n_comments for c in result.comments}
-    sig = {}
-    for c in result.comparisons:
-        if c.significant_adjusted:
-            sig.setdefault(c.claim_id, []).append(c.variable)
+    roles = result.role_breakdowns
+
+    def role_summary(claim_id: str) -> str:
+        rows = roles.get(claim_id)
+        if not rows:
+            return ""
+        return " | ".join(
+            f"{r['role']}: n={r['directional_n']}"
+            + (f", {r['pct_agree']:.0f}% agree" if r["pct_agree"] is not None else "")
+            + (f", {r['pct_disagree']:.0f}% disagree" if r["pct_disagree"] is not None else "")
+            for r in rows)
 
     rows = []
     for d in result.descriptives:
-        k = cls[d.claim_id]
+        k, b = cls[d.claim_id], bkt[d.claim_id]
+        e = exp.get(d.claim_id)
+        in_matrix = b.bucket == "clear_direction"
         rows.append({
             "q_number": qnum.get(d.claim_id),
             "claim_id": d.claim_id,
             "claim_type": ctype.get(d.claim_id),
             "book": book.get(d.claim_id),
-            "author": author.get(d.claim_id),
             "survey_text": result.survey_text.get(d.claim_id, ""),
-            "n_total": d.n_total,
-            "n_valid": d.n_valid,
-            "n_idk": d.n_idk,
-            "idk_rate_pct": round(d.idk_rate * 100, 2),
-            "high_idk": d.high_idk,
-            "median": d.median,
-            "mode": "/".join(str(m) for m in d.mode),
-            "iqr": d.iqr,
-            "pct_disagree_1_2": round(d.disagree_pct, 2) if d.disagree_pct is not None else None,
-            "pct_neutral_3": round(d.neutral_pct, 2) if d.neutral_pct is not None else None,
-            "pct_agree_4_5": round(d.agree_pct, 2) if d.agree_pct is not None else None,
+            # --- buckets and denominators
+            "bucket": b.bucket,
+            "full_sample_n": b.full_sample_n,
+            "directional_denominator": b.directional_n,
+            "idk_n": b.idk_n,
+            "idk_rate_pct": round(b.idk_rate * 100, 2),
+            "pct_agree": round(b.pct_agree * 100, 2) if b.pct_agree is not None else None,
+            "pct_disagree": round(b.pct_disagree * 100, 2) if b.pct_disagree is not None else None,
+            "pct_neutral": round(b.pct_neutral * 100, 2) if b.pct_neutral is not None else None,
+            "majority_direction": b.majority_direction,
+            "belief_label": b.belief_label,
+            "bucket_reason": b.reason,
+            # --- raw frequencies, so every percentage above is checkable
             "freq_1": d.frequencies.get(1), "freq_2": d.frequencies.get(2),
             "freq_3": d.frequencies.get(3), "freq_4": d.frequencies.get(4),
             "freq_5": d.frequencies.get(5),
             "bimodal": d.bimodal,
-            "bimodality_coefficient": (round(d.bimodality_coefficient, 4)
-                                       if d.bimodality_coefficient is not None else None),
-            "evidence_label": ev.get(d.claim_id),
-            "evidence_strength": strength.get(d.claim_id, ""),
-            "belief_class": k.belief_class,
-            "borderline": k.borderline,
+            # --- evidence, only meaningful for claims in the matrix
+            "evidence_label": ev.get(d.claim_id) if in_matrix else None,
+            "evidence_strength": strength.get(d.claim_id, "") if in_matrix else None,
+            "verdict_status": k.verdict_status,
             "belief_evidence_mismatch": k.mismatch,
             "mismatch_kind": k.mismatch_kind,
-            "scored": k.verdict_status in ("match", "mismatch"),
-            "verdict_status": k.verdict_status,
-            "verdict": k.verdict,
-            "significant_variables": "; ".join(sig.get(d.claim_id, [])),
+            "in_matrix": in_matrix,
+            # --- the two-group experience comparison
+            "experience_group_1_n": e.group_1_n if e else None,
+            "experience_group_2_n": e.group_2_n if e else None,
+            "experience_group_1_median": e.group_1_median if e else None,
+            "experience_group_2_median": e.group_2_median if e else None,
+            "mannwhitney_u": e.u_statistic if e else None,
+            "mannwhitney_p_raw": e.p_raw if e else None,
+            "mannwhitney_p_corrected": e.p_corrected if e else None,
+            "significant_after_correction": bool(e.significant_after_correction) if e else False,
+            "effect_size": (round(e.effect.r, 4) if e and e.effect else None),
+            "effect_magnitude": (e.effect.magnitude if e and e.effect else None),
+            "experience_not_tested_reason": e.reason if e else None,
+            # --- descriptive only
+            "role_breakdown": role_summary(d.claim_id),
             "n_comments": ncomments.get(d.claim_id, 0),
-            "excluded": d.excluded,
-            "exclusion_reason": d.exclusion_reason,
         })
     return pd.DataFrame(rows).sort_values("q_number").reset_index(drop=True)
+
+
+def bucket_summary_table(result: RunResult) -> pd.DataFrame:
+    """How many claims fell into each of the three buckets."""
+    counts = result.matrix.bucket_counts
+    total = sum(counts.values())
+    return pd.DataFrame([
+        {"bucket": k, "n_claims": v,
+         "pct_of_claims": round(v / total * 100, 1) if total else 0.0}
+        for k, v in counts.items()
+    ])
+
+
+def excluded_claims_table(result: RunResult) -> pd.DataFrame:
+    """The mixed and IDK-dominant claims, reported instead of being dropped."""
+    rows = []
+    for b in result.buckets:
+        if b.bucket == "clear_direction":
+            continue
+        rows.append({
+            "claim_id": b.claim_id, "bucket": b.bucket,
+            "survey_text": result.survey_text.get(b.claim_id, ""),
+            "full_sample_n": b.full_sample_n,
+            "directional_denominator": b.directional_n,
+            "idk_rate_pct": round(b.idk_rate * 100, 2),
+            "pct_agree": round(b.pct_agree * 100, 2) if b.pct_agree is not None else None,
+            "pct_disagree": round(b.pct_disagree * 100, 2) if b.pct_disagree is not None else None,
+            "pct_neutral": round(b.pct_neutral * 100, 2) if b.pct_neutral is not None else None,
+            "reason": b.reason,
+        })
+    return pd.DataFrame(rows)
+
+
+def experience_table(result: RunResult) -> pd.DataFrame:
+    """The full family of 50 Mann-Whitney results, tested or not."""
+    f = result.experience
+    return pd.DataFrame([{
+        "claim_id": r.claim_id,
+        "survey_text": result.survey_text.get(r.claim_id, ""),
+        "group_1_label": r.group_1_label, "group_1_n": r.group_1_n,
+        "group_1_median": r.group_1_median, "group_1_idk": r.group_1_idk,
+        "group_2_label": r.group_2_label, "group_2_n": r.group_2_n,
+        "group_2_median": r.group_2_median, "group_2_idk": r.group_2_idk,
+        "mannwhitney_u": r.u_statistic,
+        "mannwhitney_p_raw": r.p_raw,
+        "mannwhitney_p_corrected": r.p_corrected,
+        "significant_after_correction": r.significant_after_correction,
+        "effect_size": round(r.effect.r, 4) if r.effect else None,
+        "effect_magnitude": r.effect.magnitude if r.effect else None,
+        "favourable_pairs": r.effect.favourable_pairs if r.effect else None,
+        "unfavourable_pairs": r.effect.unfavourable_pairs if r.effect else None,
+        "tied_pairs": r.effect.tied_pairs if r.effect else None,
+        "tested": r.tested, "not_tested_reason": r.reason,
+        "correction": f.method, "alpha": f.alpha, "family_size": f.n_tested,
+    } for r in f.results])
+
+
+def role_breakdown_table(result: RunResult) -> pd.DataFrame:
+    """Descriptive role counts for clear_direction claims. No test."""
+    rows = []
+    for claim_id, breakdown in result.role_breakdowns.items():
+        for r in breakdown:
+            rows.append({"claim_id": claim_id, **{k: v for k, v in r.items()
+                                                  if k != "frequencies"},
+                         **{f"freq_{k}": v for k, v in r["frequencies"].items()}})
+    return pd.DataFrame(rows)
 
 
 def comparisons_table(result: RunResult) -> pd.DataFrame:
@@ -300,7 +412,6 @@ def matrix_table(result: RunResult) -> pd.DataFrame:
         "evidence_label": c.evidence_label,
         "count": c.count,
         "claim_ids": "; ".join(c.claim_ids),
-        "borderline_claim_ids": "; ".join(c.borderline_claim_ids),
     } for c in result.matrix.cells])
 
 
@@ -323,7 +434,10 @@ def export_all(result: RunResult, cfg: Config, out_dir: str | Path | None = None
     caveat = {
         "sampling_caveat": cfg.get("reporting.sampling_caveat"),
         "question_order_caveat": cfg.get("reporting.question_order_caveat"),
-        "belief_threshold_status": result.matrix.threshold_status,
+        "classification_rule": (
+            f"majority > {result.matrix.majority_threshold:.0%} of directional "
+            f"answers; IDK-dominant at >= {result.matrix.idk_dominance_threshold:.0%} "
+            "of the full sample"),
     }
 
     paths: dict[str, str] = {}
@@ -340,6 +454,10 @@ def export_all(result: RunResult, cfg: Config, out_dir: str | Path | None = None
         paths[name] = str(p)
 
     _csv(results_table(result, cfg), "claim_results.csv")
+    _csv(bucket_summary_table(result), "bucket_summary.csv")
+    _csv(excluded_claims_table(result), "excluded_claims.csv")
+    _csv(experience_table(result), "experience_mannwhitney.csv")
+    _csv(role_breakdown_table(result), "role_breakdown.csv")
     _csv(comparisons_table(result), "subgroup_comparisons.csv")
     _csv(matrix_table(result), "belief_evidence_matrix.csv")
     _csv(pd.DataFrame([e.to_dict() for e in result.exclusions]), "exclusions.csv")

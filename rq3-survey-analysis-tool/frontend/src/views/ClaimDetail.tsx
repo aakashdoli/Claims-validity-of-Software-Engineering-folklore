@@ -556,7 +556,6 @@ export function ClaimDetail() {
   const s = d.descriptives
   const k = d.classification
   const b = s.bimodality
-  const believed = k.belief_class === 'Widely believed'
 
   return (
     <>
@@ -582,10 +581,9 @@ export function ClaimDetail() {
           <span className="sub">Q{d.claim.q_number} · {d.claim.claim_type}</span>
           <div className="spacer" />
           {s.bimodal && <Chip kind="warning" title={b.reason}>bimodal</Chip>}{' '}
-          {s.high_idk && <Chip kind="warning"
-            title={`IDK rate at or above ${s.high_idk_threshold_pct}% — needs manual review`}>
-            ⚑ high IDK</Chip>}{' '}
-          {k.borderline && <Chip kind="warning" title={k.reason ?? ''}>borderline</Chip>}{' '}
+          {k.bucket === 'clear_direction' && <Chip kind="good">{k.belief_label}</Chip>}{' '}
+          {k.bucket === 'mixed' && <Chip kind="muted" title={k.reason ?? ''}>no clear majority</Chip>}{' '}
+          {k.bucket === 'idk_dominant' && <Chip kind="warning" title={k.reason ?? ''}>IDK-dominant</Chip>}{' '}
           {k.mismatch && <Chip kind="critical" title={k.mismatch_kind ?? ''}>⚑ mismatch</Chip>}
         </header>
         <p style={{ fontSize: 16, lineHeight: 1.55, margin: '0 0 16px' }}>
@@ -604,7 +602,9 @@ export function ClaimDetail() {
                 MISSING</Chip>
             : d.claim.author}</dd>
           <dt>RQ2 evidence label</dt>
-          <dd>{k.evidence_label === d.pending_label
+          <dd>{!k.in_matrix
+            ? <span className="excluded">not compared — this claim is outside the matrix</span>
+            : k.evidence_label === d.pending_label
             ? <Chip kind="muted" title="Not entered yet in data/claims_evidence.csv">
                 {d.pending_label}</Chip>
             : <>
@@ -709,54 +709,51 @@ export function ClaimDetail() {
       <h2 id="result" style={{ margin: '22px 0 10px' }}>E · Result for this claim</h2>
       <div className="card">
         <dl className="kv">
-          <dt>Median (IDK excluded)</dt>
-          <dd><strong>{fmtNum(s.median, 1)}</strong> from {s.n_valid} valid answers
-            (mode {s.mode.join('/') || '—'}, IQR {fmtNum(s.iqr, 1)})</dd>
-          <dt>Belief classification</dt>
+          <dt>Bucket</dt>
           <dd>
-            <strong>{k.belief_class}</strong> — median {fmtNum(s.median, 1)}{' '}
-            {believed ? '≥' : '<'} threshold {d.belief_threshold}
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              threshold {d.belief_threshold} is pending Davide's sign-off — not a final value
-              {k.borderline && `; this median is within ${d.borderline_delta} of the cutoff, so the classification is provisional`}
+            <strong>{k.bucket.replace(/_/g, ' ')}</strong>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+              {k.reason}
             </div>
           </dd>
-          <dt>Subgroups differing significantly</dt>
-          <dd>
-            {d.significant_comparisons.length === 0
-              ? <span className="excluded">
-                  none — no demographic comparison survived Benjamini–Hochberg correction
-                </span>
-              : d.significant_comparisons.map(x => (
-                  <div key={x.variable}>
-                    <strong style={{ textTransform: 'capitalize' }}>
-                      {x.variable.replace(/_/g, ' ')}</strong>{' '}
-                    — adjusted p = {pText(x.p_adjusted)}
-                    {x.effect && (x.effect.r != null
-                      ? `, r = ${x.effect.r.toFixed(3)} (${x.effect.magnitude})`
-                      : `, ε² = ${x.effect.epsilon_squared.toFixed(3)} (${x.effect.magnitude})`)}
-                  </div>
-                ))}
-          </dd>
-          <dt>Bimodality</dt>
-          <dd>{b.flag
-            ? 'Flagged — the answers split at both ends, so the median alone understates the disagreement.'
-            : b.assessed ? 'Not flagged.' : b.reason}</dd>
+          <dt>Directional split</dt>
+          <dd>{k.pct_agree == null
+            ? <span className="excluded">not computed — IDK-dominant</span>
+            : <>
+                {(k.pct_agree * 100).toFixed(1)}% agreed ·{' '}
+                {(k.pct_neutral! * 100).toFixed(1)}% neutral ·{' '}
+                {(k.pct_disagree! * 100).toFixed(1)}% disagreed
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+                  of {k.directional_n} directional answers (the five substantive points;
+                  IDK excluded). Majority threshold {(d.majority_threshold * 100).toFixed(0)}%,
+                  strictly greater than.
+                </div>
+              </>}</dd>
           <dt>IDK rate</dt>
           <dd>
-            <strong>{(s.idk_rate * 100).toFixed(1)}%</strong> ({s.n_idk} of {s.n_total})
-            {s.high_idk && (
-              <div style={{ marginTop: 4 }}>
-                <Chip kind="warning">
-                  ⚑ at or above {s.high_idk_threshold_pct}% — needs manual review
-                </Chip>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  The median for this claim rests on {s.n_valid} of {s.n_total} respondents.
-                  Treat it as describing those who felt able to answer, not the whole sample.
-                </div>
-              </div>
-            )}
+            <strong>{(k.idk_rate * 100).toFixed(1)}%</strong> of the full sample
+            ({s.n_idk} of {k.full_sample_n})
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 3 }}>
+              Dominance threshold {(d.idk_dominance_threshold * 100).toFixed(0)}%, checked
+              against the full sample before any majority is computed.
+            </div>
           </dd>
+          <dt>Experience comparison</dt>
+          <dd>{d.significant_comparisons.length === 0
+            ? <span className="excluded">
+                no experience difference survived Benjamini–Hochberg correction
+              </span>
+            : d.significant_comparisons.map(x => (
+                <div key={x.variable}>
+                  <strong>Under 10 years vs 10+ years</strong> — adjusted p ={' '}
+                  {pText(x.p_adjusted)}
+                  {x.effect?.r != null && `, r = ${x.effect.r.toFixed(3)} (${x.effect.magnitude})`}
+                </div>
+              ))}</dd>
+          <dt>Bimodality</dt>
+          <dd>{b.flag
+            ? 'Flagged — the answers split at both ends.'
+            : b.assessed ? 'Not flagged.' : b.reason}</dd>
         </dl>
       </div>
 
@@ -784,8 +781,12 @@ export function ClaimDetail() {
         </header>
         <p style={{ margin: '0 0 12px', fontSize: 15, lineHeight: 1.55 }}>{k.verdict}</p>
         <dl className="kv">
-          <dt>Belief (this survey)</dt>
-          <dd>{k.belief_class} — median {fmtNum(k.median, 1)}</dd>
+          <dt>Majority direction</dt>
+          <dd>{k.belief_label
+            ? <>{k.belief_label} — {(k.pct_agree != null && k.majority_direction === 'agreed'
+                  ? k.pct_agree * 100 : (k.pct_disagree ?? 0) * 100).toFixed(1)}%
+                of {k.directional_n} directional answers</>
+            : <span className="excluded">no majority — this claim is outside the matrix</span>}</dd>
           <dt>Strength of evidence</dt>
           <dd>{k.evidence_strength
             ? <>{k.evidence_strength}{' '}

@@ -145,10 +145,35 @@ def test_every_tested_comparison_has_an_effect_size(run_real):
         assert (c.effect is not None) or (c.omnibus_effect is not None)
 
 
-def test_every_claim_is_placed_in_the_matrix(run_real):
+def test_every_claim_is_placed_or_explicitly_excluded(run_real):
+    """The matrix holds clear_direction claims; the rest are listed, not lost."""
     result, _ = run_real
-    placed = [cid for cell in result.matrix.cells for cid in cell.claim_ids]
-    assert sorted(placed) == sorted(result.claims["claim_id"])
+    placed = {cid for cell in result.matrix.cells for cid in cell.claim_ids}
+    excluded = set(result.matrix.excluded_mixed) | set(result.matrix.excluded_idk_dominant)
+    assert placed.isdisjoint(excluded)
+    assert placed | excluded == set(result.claims["claim_id"])
+    assert len(placed) == result.matrix.bucket_counts["clear_direction"]
+
+
+def test_bucket_counts_sum_to_every_claim(run_real):
+    result, _ = run_real
+    assert sum(result.matrix.bucket_counts.values()) == len(result.claims)
+
+
+def test_experience_split_matches_the_configured_bands(run_real):
+    result, cfg = run_real
+    e = result.experience
+    assert e.group_1_label == "Under 10 years"
+    assert e.group_2_label == "10+ years"
+    assert e.group_1_total + e.group_2_total + e.unassigned_n == \
+        result.manifest.n_respondents
+    assert len(e.results) == len(result.claims)
+
+
+def test_effect_size_only_on_significant_experience_results(run_real):
+    result, _ = run_real
+    for r in result.experience.results:
+        assert (r.effect is not None) == r.significant_after_correction
 
 
 def test_every_excluded_subgroup_is_logged(run_real):
@@ -226,7 +251,8 @@ def test_manifest_records_provenance(run_real):
     assert len(m.input_sha256) == 64
     assert m.n_respondents > 0
     assert m.n_claims == 50
-    assert m.config["belief"]["threshold"] == 3.5
+    assert m.config["belief"]["majority"]["threshold"] == 0.50
+    assert m.config["belief"]["idk_dominance"]["threshold"] == 0.30
     assert m.library_versions["scipy"]
     assert m.run_id.endswith(m.input_sha256[:8])
 

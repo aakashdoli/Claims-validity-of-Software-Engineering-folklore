@@ -8,7 +8,7 @@ where the comments are most likely to explain a quantitative pattern:
 * the claim was flagged bimodal in Stage 1 (comments explain the split);
 * a subgroup difference on the claim survived BH correction in Stage 4;
 * the claim is a belief-evidence mismatch in Stage 5;
-* the claim sits borderline against the belief threshold;
+* the claim reached no majority, or was IDK-dominant;
 * the claim simply drew an unusual volume of comments.
 
 Weights live in ``config.yaml`` (``comments.priority_weights``).
@@ -60,7 +60,9 @@ def collect_comments(comments: pd.DataFrame, descriptives: list[ClaimDescriptive
     bimodal = {d.claim_id for d in descriptives if d.bimodal}
     significant = {c.claim_id for c in comparisons if c.significant_adjusted}
     mismatched = {c.claim_id for c in matrix.classifications if c.mismatch}
-    borderline = {c.claim_id for c in matrix.classifications if c.borderline}
+    # A claim with no clear direction, or one most people could not answer, is
+    # exactly where the free text is most likely to explain the pattern.
+    borderline = {c.claim_id for c in matrix.classifications if not c.in_matrix}
 
     by_claim: dict[str, list[CommentEntry]] = {}
     if not comments.empty:
@@ -86,7 +88,7 @@ def collect_comments(comments: pd.DataFrame, descriptives: list[ClaimDescriptive
             reasons.append("belief-evidence mismatch (Stage 5)")
         if d.claim_id in borderline:
             score += int(weights["borderline_threshold"])
-            reasons.append("median borderline against the belief threshold (Stage 5)")
+            reasons.append("no clear majority, or IDK-dominant (Stage 5)")
         if len(entries) >= high_volume:
             score += int(weights["high_comment_volume"])
             reasons.append(f"high comment volume (>= {high_volume})")

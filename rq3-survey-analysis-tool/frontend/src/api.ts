@@ -15,6 +15,7 @@ async function get<T>(path: string): Promise<T> {
 export const api = {
   overview: () => get<Overview>('/api/overview'),
   claim: (id: string) => get<ClaimDetail>(`/api/claims/${encodeURIComponent(id)}`),
+  conclusions: () => get<Record<string, any>>('/api/conclusions'),
   matrix: () => get<Matrix>('/api/matrix').then(r => (r as any).matrix as Matrix),
   quality: () => get<QualityPayload>('/api/quality'),
   methodology: () => get<Methodology>('/api/methodology'),

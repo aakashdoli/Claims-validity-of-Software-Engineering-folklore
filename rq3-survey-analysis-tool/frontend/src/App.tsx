@@ -7,6 +7,7 @@ import { api } from './api'
 import { ErrorBox, Loading } from './components/common'
 import { ClaimDetail } from './views/ClaimDetail'
 import { Comments } from './views/Comments'
+import { Conclusions } from './views/Conclusions'
 import { MatrixView } from './views/MatrixView'
 import { Methodology } from './views/Methodology'
 import { Overview } from './views/Overview'
@@ -15,6 +16,7 @@ import type { Overview as OverviewData } from './types'
 
 const TABS: [string, string][] = [
   ['/', 'Claims'],
+  ['/conclusions', 'Conclusions'],
   ['/matrix', 'Belief–evidence matrix'],
   ['/comments', 'Comments'],
   ['/quality', 'Data quality'],
@@ -84,6 +86,7 @@ function Shell() {
           <Routes>
             <Route path="/" element={<Overview data={data} onOpenClaim={openClaim} />} />
             <Route path="/claims/:claimId" element={<ClaimDetail />} />
+            <Route path="/conclusions" element={<Conclusions />} />
             <Route path="/matrix"
                    element={<MatrixView caveats={data.caveats} onOpenClaim={openClaim} />} />
             <Route path="/comments"

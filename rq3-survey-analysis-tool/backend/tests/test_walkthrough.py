@@ -306,24 +306,3 @@ def test_bimodality_not_assessed_is_stated_explicitly(cfg):
     assert b.assessed is False
     assert b.checks == []
     assert "not assessed" in b.reason
-
-
-# ---------------------------------------------------------------------------
-# High-IDK flag
-# ---------------------------------------------------------------------------
-
-def test_high_idk_flag_uses_the_configured_threshold(cfg):
-    # 30 IDK of 100 respondents = 30% >= the 25% default.
-    s = pd.Series(["4"] * 70 + ["IDK"] * 30)
-    d = describe_claim("CLM-TEST", s, cfg)
-    assert d.high_idk is True
-    assert d.high_idk_threshold_pct == pytest.approx(25.0)
-
-    s = pd.Series(["4"] * 90 + ["IDK"] * 10)
-    assert describe_claim("CLM-TEST", s, cfg).high_idk is False
-
-
-def test_high_idk_threshold_is_configurable(cfg_factory):
-    cfg = cfg_factory(**{"descriptives.high_idk_rate_pct": 50.0})
-    s = pd.Series(["4"] * 70 + ["IDK"] * 30)
-    assert describe_claim("CLM-TEST", s, cfg).high_idk is False

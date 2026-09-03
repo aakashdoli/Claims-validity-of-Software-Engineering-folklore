@@ -68,13 +68,14 @@ class Config:
         return int(self.get("likert.missing_code"))
 
     @property
-    def belief_threshold(self) -> float:
-        """The 'widely believed' cutoff.
+    def idk_dominance_threshold(self) -> float:
+        """Share of the FULL sample above which a claim is IDK-dominant."""
+        return float(self.get("belief.idk_dominance.threshold"))
 
-        PENDING DAVIDE'S SIGN-OFF — not a final methodological choice. It is
-        read from config here and nowhere else in the codebase.
-        """
-        return float(self.get("belief.threshold"))
+    @property
+    def majority_threshold(self) -> float:
+        """Share of the DIRECTIONAL denominator a side must exceed."""
+        return float(self.get("belief.majority.threshold"))
 
     @property
     def min_subgroup_size(self) -> int:
@@ -102,8 +103,12 @@ _REQUIRED_KEYS = (
     "comparisons.variables",
     "effect_size.thresholds.small",
     "correction.method",
-    "belief.threshold",
-    "belief.borderline_delta",
+    "belief.idk_dominance.threshold",
+    "belief.majority.threshold",
+    "belief.evidence_labels",
+    "experience_split.variable",
+    "experience_split.group_1",
+    "experience_split.group_2",
     "quality.low_effort.max_distinct_values",
     "reporting.sampling_caveat",
 )

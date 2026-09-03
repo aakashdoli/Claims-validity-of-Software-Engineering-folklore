@@ -140,7 +140,7 @@ def overview() -> dict[str, Any]:
             "n_claims": result.manifest.n_claims,
             "n_comments": result.manifest.n_comments,
             "n_bimodal": int(table["bimodal"].sum()),
-            "n_borderline": result.matrix.n_borderline,
+            "bucket_counts": result.matrix.bucket_counts,
             "n_mismatch": result.matrix.n_mismatch,
             "n_match": result.matrix.n_match,
             "n_not_scored": result.matrix.n_not_scored,
@@ -190,11 +190,152 @@ def claim_detail(claim_id: str) -> dict[str, Any]:
         "likert_labels": cfg.get("likert.labels"),
         "idk_label": cfg.get("likert.idk_label"),
         "min_subgroup_size": cfg.min_subgroup_size,
-        "belief_threshold": cfg.belief_threshold,
-        "belief_threshold_status": result.matrix.threshold_status,
-        "borderline_delta": float(cfg.get("belief.borderline_delta")),
+        "majority_threshold": cfg.majority_threshold,
+        "idk_dominance_threshold": cfg.idk_dominance_threshold,
         "pending_label": str(cfg.get("belief.pending_label")),
         "effect_size_thresholds": cfg.get("effect_size.thresholds"),
+        "caveats": _caveats(cfg),
+    }
+
+
+@app.get("/api/conclusions")
+def conclusions() -> dict[str, Any]:
+    """The findings view: the numbers a reader should leave with.
+
+    Every figure is derived here rather than in the frontend, so the conclusion
+    tab can never drift from the matrix and the claim pages.
+    """
+    result, cfg = store.result, store.cfg
+    m = result.matrix
+    desc = {d.claim_id: d for d in result.descriptives}
+    meta = {r["claim_id"]: r for r in result.claims.to_dict(orient="records")}
+    text = result.survey_text
+
+    def pack(c, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        d = desc[c.claim_id]
+        out = {
+            "claim_id": c.claim_id, "text": text.get(c.claim_id, ""),
+            "book": meta[c.claim_id]["book"],
+            "agree_pct": (c.pct_agree * 100) if c.pct_agree is not None else None,
+            "neutral_pct": (c.pct_neutral * 100) if c.pct_neutral is not None else None,
+            "disagree_pct": (c.pct_disagree * 100) if c.pct_disagree is not None else None,
+            "idk_pct": c.idk_rate * 100,
+            "n_valid": c.directional_n, "n_total": c.full_sample_n,
+            "bucket": c.bucket,
+            "evidence_label": c.evidence_label, "belief_class": c.belief_label,
+        }
+        return {**out, **(extra or {})}
+
+    scored = [c for c in m.classifications if c.verdict_status in ("match", "mismatch")]
+    mismatches = [c for c in m.classifications if c.verdict_status == "mismatch"]
+
+    # The IDK contrast: mismatched claims are the ones people could not evaluate.
+    def mean_idk(status: str) -> float:
+        rows = [desc[c.claim_id].idk_rate * 100
+                for c in m.classifications if c.verdict_status == status]
+        return round(sum(rows) / len(rows), 1) if rows else 0.0
+
+    believed_contradicted = sorted(
+        [pack(c) for c in mismatches if c.evidence_label == "CONTRADICTED"],
+        key=lambda r: -(r["agree_pct"] or 0))
+    unbelieved_supported = sorted(
+        [pack(c) for c in mismatches if c.evidence_label == "SUPPORTED"],
+        key=lambda r: -(r["disagree_pct"] or 0))
+
+    # The specified inferential comparison: experience, two groups, one BH
+    # family of 50. The per-variable Kruskal-Wallis families are a separate,
+    # secondary analysis and are not what this view reports.
+    sig = [{"claim_id": r.claim_id, "variable": "experience",
+            "text": text.get(r.claim_id, ""), "p_adjusted": r.p_corrected,
+            "p_raw": r.p_raw,
+            "group_1": {"label": r.group_1_label, "n": r.group_1_n,
+                        "median": r.group_1_median},
+            "group_2": {"label": r.group_2_label, "n": r.group_2_n,
+                        "median": r.group_2_median},
+            "effect": r.effect.r if r.effect else None,
+            "magnitude": r.effect.magnitude if r.effect else None}
+           for r in result.experience.results if r.significant_after_correction]
+    n_tests = result.experience.n_tested
+
+    return {
+        "headline": {
+            "n_mismatch": m.n_mismatch, "n_scored": m.n_scored,
+            "n_match": m.n_match, "n_not_scored": m.n_not_scored,
+            "pct_mismatch": round(m.n_mismatch / m.n_scored * 100, 1) if m.n_scored else 0.0,
+            "n_claims": len(m.classifications),
+            "n_respondents": result.manifest.n_respondents,
+        },
+        "matrix": m.to_dict(),
+        "survey_text": text,
+        "believed_contradicted": believed_contradicted,
+        "unbelieved_supported": unbelieved_supported,
+        "idk_contrast": {
+            "match": mean_idk("match"), "mismatch": mean_idk("mismatch"),
+            "not_scored": mean_idk("not_scored"),
+            "highest": sorted(
+                [pack(c) for c in m.classifications],
+                key=lambda r: -r["idk_pct"])[:5],
+            "threshold_pct": cfg.idk_dominance_threshold * 100,
+            "n_above_threshold": result.matrix.bucket_counts.get("idk_dominant", 0),
+        },
+        # NO EVIDENCE FOUND is a finding, not a null result: a claim asserted as
+        # guidance in practitioner literature that empirical research has not
+        # addressed points directly at where future work would be useful. The
+        # sharpest pointers are the ones practitioners are CONFIDENT about —
+        # high agreement AND a low IDK rate — because there the profession has
+        # settled on an answer no study has checked.
+        "research_gap": {
+            "n": m.n_not_scored,
+            "believed": sorted(
+                [pack(c, {"claim_type": meta[c.claim_id]["claim_type"]})
+                 for c in m.classifications
+                 if c.verdict_status == "not_scored" and c.belief_label == "Majority agreed"],
+                key=lambda r: -(r["agree_pct"] or 0)),
+            "not_believed": sorted(
+                [pack(c, {"claim_type": meta[c.claim_id]["claim_type"]})
+                 for c in m.classifications
+                 if c.verdict_status == "not_scored" and c.belief_label != "Majority agreed"],
+                key=lambda r: -(r["agree_pct"] or 0)),
+            # "Confident" = the profession agrees and few people abstained, so
+            # the gap is not explained away by respondents not knowing.
+            "confident_idk_ceiling": 15.0,
+        },
+        # Strength qualifiers travel with the label rather than splitting the
+        # matrix. A SUPPORTED claim resting on one small-sample study is a
+        # weaker warrant than one resting on an SLR, and that belongs in the
+        # write-up even though it does not change the category.
+        "evidence_strength": {
+            "n_qualified": sum(1 for r in result.claims.to_dict(orient="records")
+                               if str(r.get("evidence_strength") or "").strip()),
+            "n_claims": len(m.classifications),
+            "qualified": [
+                {"claim_id": r["claim_id"], "label": r["evidence_label"],
+                 "strength": str(r["evidence_strength"]).strip(),
+                 "text": text.get(r["claim_id"], "")}
+                for r in result.claims.to_dict(orient="records")
+                if str(r.get("evidence_strength") or "").strip()
+            ],
+        },
+        "subgroups": {
+            "n_significant": len(sig), "n_tests": n_tests,
+            "results": sorted(sig, key=lambda r: r["p_adjusted"] or 1),
+        },
+        "bimodal": [pack(c, {"reason": desc[c.claim_id].bimodality_reason})
+                    for c in m.classifications if desc[c.claim_id].bimodal],
+        "buckets": {
+            "counts": m.bucket_counts,
+            "mixed": m.excluded_mixed,
+            "idk_dominant": m.excluded_idk_dominant,
+            "majority_threshold": m.majority_threshold,
+            "idk_dominance_threshold": m.idk_dominance_threshold,
+        },
+        "belief_split": {
+            "majority_agreed": sum(1 for c in m.classifications
+                                   if c.belief_label == "Majority agreed"),
+            "majority_disagreed": sum(1 for c in m.classifications
+                                      if c.belief_label == "Majority disagreed"),
+        },
+        "experience": result.experience.to_dict(),
         "caveats": _caveats(cfg),
     }
 
@@ -240,7 +381,41 @@ def methodology() -> dict[str, Any]:
         "config_path": str(cfg.path),
         "manifest": result.manifest.to_dict(),
         "caveats": _caveats(cfg),
-        "belief_threshold_status": result.matrix.threshold_status,
+        # What ACTUALLY ran, as opposed to what the code is capable of. The
+        # methods section of the thesis has to describe the former: with 3+
+        # surviving subgroups on every demographic, no two-group comparison ever
+        # occurred, so every omnibus test was Kruskal-Wallis and carried
+        # epsilon-squared — rank-biserial appears only on the pairwise follow-ups.
+        "tests_run": {
+            "n_attempted": len(result.comparisons),
+            "n_run": sum(1 for c in result.comparisons if c.p_value is not None),
+            "by_test": {
+                "mann_whitney_u": sum(1 for c in result.comparisons
+                                      if c.test == "mann_whitney_u"),
+                "kruskal_wallis": sum(1 for c in result.comparisons
+                                      if c.test == "kruskal_wallis"),
+            },
+            "n_rank_biserial_omnibus": sum(1 for c in result.comparisons if c.effect),
+            "n_epsilon_squared_omnibus": sum(1 for c in result.comparisons
+                                             if c.omnibus_effect),
+            "n_pairwise": sum(len(c.pairwise) for c in result.comparisons),
+            "n_pairwise_rank_biserial": sum(1 for c in result.comparisons
+                                            for p in c.pairwise if p.effect),
+            "n_pairwise_significant": sum(1 for c in result.comparisons
+                                          for p in c.pairwise if p.significant_adjusted),
+            "n_significant_omnibus": sum(1 for c in result.comparisons
+                                         if c.significant_adjusted),
+            "subgroups_per_variable": {
+                v: len({g.group for c in result.comparisons if c.variable == v
+                        for g in c.groups if g.included})
+                for v in cfg.get("comparisons.variables")
+            },
+            "note": ("Every demographic variable had three or more subgroups above "
+                     "the minimum size, so no two-group comparison arose and every "
+                     "omnibus test was Kruskal-Wallis. Mann-Whitney U and Kerby's "
+                     "rank-biserial are used in the pairwise follow-ups, which run "
+                     "only after an omnibus result survives correction."),
+        },
         "citations": [
             {"stage": "Stage 1 — descriptives",
              "why": "Median, not mean: individual Likert items are ordinal.",
@@ -307,8 +482,8 @@ def export(kind: str):
     buf.write(f"# run_id: {result.manifest.run_id}\n")
     buf.write(f"# input_file: {result.manifest.input_file}\n")
     buf.write(f"# input_sha256: {result.manifest.input_sha256}\n")
-    buf.write(f"# belief_threshold: {cfg.belief_threshold} "
-              f"({result.matrix.threshold_status})\n")
+    buf.write(f"# majority_threshold: {cfg.majority_threshold}\n")
+    buf.write(f"# idk_dominance_threshold: {cfg.idk_dominance_threshold}\n")
     buf.write(f"# min_subgroup_size: {cfg.min_subgroup_size}\n")
     df.to_csv(buf, index=False)
     buf.seek(0)

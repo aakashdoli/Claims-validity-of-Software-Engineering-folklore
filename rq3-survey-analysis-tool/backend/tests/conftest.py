@@ -8,7 +8,9 @@ import pytest
 from rq3.config import Config, load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REAL_EXPORT = PROJECT_ROOT / "data" / "raw" / "export (2).xlsx"
+# Whatever config.yaml currently points at — never a hardcoded filename,
+# so switching export does not leave the tests on the previous one.
+REAL_EXPORT = load_config().resolve_path("dataset.input_file")
 
 
 @pytest.fixture

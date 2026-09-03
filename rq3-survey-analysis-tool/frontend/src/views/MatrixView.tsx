@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { Caveat, Chip, ErrorBox, Loading, fmtNum } from '../components/common'
+import { Caveat, Chip, ErrorBox, Loading } from '../components/common'
 import type { Caveats, Matrix } from '../types'
 
 export function MatrixView({ caveats, onOpenClaim }: {
@@ -17,14 +17,14 @@ export function MatrixView({ caveats, onOpenClaim }: {
   const cell = (belief: string, label: string) =>
     m.cells.find(c => c.belief_class === belief && c.evidence_label === label)
 
-  // Mismatch cells are the RQ3 finding: believed-but-contradicted / not-believed-
-  // but-supported. Marked with a status accent AND a label — never colour alone.
-  // NO EVIDENCE FOUND is deliberately absent: with no evidence located there is
-  // nothing for belief to agree or disagree with, so that column is reported in
-  // its own bucket and never scored as a match or a mismatch.
+  // Mismatch cells are the RQ3 finding: a majority agreed with a contradicted
+  // claim, or disagreed with a supported one. Marked with a status accent AND a
+  // label — never colour alone. NO EVIDENCE FOUND is deliberately absent: with
+  // no evidence located there is nothing to agree or disagree with, so that
+  // column is reported in its own bucket and never scored either way.
   const isMismatch = (belief: string, label: string) =>
-    (belief === 'Widely believed' && label === 'CONTRADICTED') ||
-    (belief === 'Not widely believed' && label === 'SUPPORTED')
+    (belief === 'Majority agreed' && label === 'CONTRADICTED') ||
+    (belief === 'Majority disagreed' && label === 'SUPPORTED')
 
   const cols = m.evidence_labels
   const gridStyle = {
@@ -34,14 +34,17 @@ export function MatrixView({ caveats, onOpenClaim }: {
   return (
     <>
       <Caveat caveats={caveats} extra={
-        <p><strong>Belief threshold.</strong> A claim counts as widely believed when its median
-          is ≥ {m.threshold}. {m.threshold_status}. Claims within {m.borderline_delta} of the
-          threshold are shown with a dashed outline — their cell placement is provisional.</p>} />
+        <p><strong>What enters the matrix.</strong> Only claims where one side passed{' '}
+          {(m.majority_threshold * 100).toFixed(0)}% of the directional answers (the five
+          substantive Likert points; IDK excluded). {m.bucket_counts.mixed} claim(s) reached
+          no majority and {m.bucket_counts.idk_dominant} were IDK-dominant at ≥{' '}
+          {(m.idk_dominance_threshold * 100).toFixed(0)}% of the full sample — both are
+          listed below rather than placed in a cell.</p>} />
 
       <div className="tiles">
-        <div className="tile"><div className="label">Belief threshold</div>
-          <div className="value">{fmtNum(m.threshold, 1)}</div>
-          <div className="note">{m.threshold_status}</div></div>
+        <div className="tile"><div className="label">In the matrix</div>
+          <div className="value">{m.bucket_counts.clear_direction}</div>
+          <div className="note">claims with a clear majority direction</div></div>
         <div className="tile"><div className="label">Mismatches</div>
           <div className="value">{m.n_mismatch}<span style={{ fontSize: 15,
             color: 'var(--text-muted)', fontWeight: 400 }}> / {m.n_scored}</span></div>
@@ -52,9 +55,12 @@ export function MatrixView({ caveats, onOpenClaim }: {
         <div className="tile"><div className="label">Not scored</div>
           <div className="value">{m.n_not_scored}</div>
           <div className="note">NO EVIDENCE FOUND — nothing to agree with</div></div>
-        <div className="tile flagged"><div className="label">Borderline</div>
-          <div className="value">{m.n_borderline}</div>
-          <div className="note">need manual review before reporting</div></div>
+        <div className="tile"><div className="label">No majority</div>
+          <div className="value">{m.bucket_counts.mixed}</div>
+          <div className="note">neither side passed the threshold</div></div>
+        <div className="tile flagged"><div className="label">IDK-dominant</div>
+          <div className="value">{m.bucket_counts.idk_dominant}</div>
+          <div className="note">excluded — most could not answer</div></div>
         <div className="tile"><div className="label">Unlabelled (RQ2 pending)</div>
           <div className="value">{m.n_pending_evidence}</div>
           <div className="note">fill data/claims_evidence.csv</div></div>
@@ -64,7 +70,7 @@ export function MatrixView({ caveats, onOpenClaim }: {
         <header>
           <h2>Belief–evidence matrix</h2>
           <span className="sub">
-            median belief × RQ2 evidence label · click a claim ID to open its detail view
+            majority direction × RQ2 evidence label · clear-direction claims only
           </span>
           <div className="spacer" />
           <a className="btn" href={api.exportUrl('matrix')} download>Export matrix (CSV)</a>
@@ -87,11 +93,7 @@ export function MatrixView({ caveats, onOpenClaim }: {
               width: 3, height: 14 }} />
             ⚑ belief–evidence mismatch
           </span>
-          <span className="item">
-            <span className="swatch" style={{
-              background: 'transparent', border: '1px dashed var(--border-strong)' }} />
-            dashed claim ID = borderline against the threshold
-          </span>
+
         </div>
       </div>
 
@@ -105,16 +107,16 @@ export function MatrixView({ caveats, onOpenClaim }: {
       <div className="card">
         <header>
           <h2>Per-claim classification</h2>
-          <span className="sub">every claim, its median, and its distance from the threshold</span>
+          <span className="sub">every claim, its directional split, and why it is in or out</span>
         </header>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Claim</th><th className="num">Median</th>
-                <th className="num">Distance from threshold</th>
-                <th>Belief</th><th>RQ2 evidence</th><th>Status</th>
-                <th className="num">n valid</th><th className="num">IDK rate</th>
+                <th>Claim</th><th className="num">% agree</th>
+                <th className="num">% disagree</th>
+                <th>Bucket</th><th>Majority</th><th>RQ2 evidence</th><th>Status</th>
+                <th className="num">directional n</th><th className="num">IDK rate</th>
               </tr>
             </thead>
             <tbody>
@@ -123,16 +125,17 @@ export function MatrixView({ caveats, onOpenClaim }: {
                   <td className="claim-link">
                     <button onClick={() => onOpenClaim(c.claim_id)}>{c.claim_id}</button>
                   </td>
-                  <td className="num">{fmtNum(c.median, 1)}</td>
-                  <td className="num">{fmtNum(c.distance_from_threshold, 2)}</td>
-                  <td>{c.belief_class}</td>
-                  <td>{c.evidence_label}</td>
+                  <td className="num">{c.pct_agree == null ? '—' : `${(c.pct_agree * 100).toFixed(1)}%`}</td>
+                  <td className="num">{c.pct_disagree == null ? '—' : `${(c.pct_disagree * 100).toFixed(1)}%`}</td>
+                  <td>{c.bucket.replace(/_/g, ' ')}</td>
+                  <td>{c.belief_label ?? <span className="excluded">—</span>}</td>
+                  <td>{c.in_matrix ? c.evidence_label : <span className="excluded">n/a</span>}</td>
                   <td>
-                    {c.mismatch && <Chip kind="critical" title={c.mismatch_kind ?? ''}>⚑ mismatch</Chip>}{' '}
-                    {c.borderline && <Chip kind="warning" title={c.reason ?? ''}>borderline</Chip>}
-                    {!c.mismatch && !c.borderline && <span className="excluded">—</span>}
+                    {c.mismatch && <Chip kind="critical" title={c.mismatch_kind ?? ''}>⚑ mismatch</Chip>}
+                    {!c.mismatch && c.in_matrix && <Chip kind="muted">{c.verdict_status}</Chip>}
+                    {!c.in_matrix && <Chip kind="warning" title={c.reason ?? ''}>excluded</Chip>}
                   </td>
-                  <td className="num">{c.n_valid}</td>
+                  <td className="num">{c.directional_n}</td>
                   <td className="num">{(c.idk_rate * 100).toFixed(1)}%</td>
                 </tr>
               ))}

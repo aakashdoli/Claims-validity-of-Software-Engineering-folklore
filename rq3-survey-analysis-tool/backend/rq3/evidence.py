@@ -65,6 +65,12 @@ _PHRASE_SYNONYMS: dict[str, tuple[str, str]] = {
     "partly supported": ("SUPPORTED", "partial evidence"),
     "strongly supported": ("SUPPORTED", "strong evidence"),
     "weakly contradicted": ("CONTRADICTED", "weak evidence"),
+    # Hedged verdicts: the direction is stated, the confidence is qualified.
+    # Collapsed like any other qualifier — the hedge is preserved as prose.
+    "likely contradicted": ("CONTRADICTED", "likely"),
+    "probably contradicted": ("CONTRADICTED", "likely"),
+    "likely supported": ("SUPPORTED", "likely"),
+    "probably supported": ("SUPPORTED", "likely"),
     "partially contradicted": ("CONTRADICTED", "partial evidence"),
 }
 

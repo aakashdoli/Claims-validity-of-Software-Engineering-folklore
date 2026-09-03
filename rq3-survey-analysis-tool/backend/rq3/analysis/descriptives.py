@@ -89,8 +89,6 @@ class ClaimDescriptives:
     bimodality_reason: str
     bimodality_coefficient: float | None
     bimodality: BimodalityAssessment
-    high_idk: bool = False
-    high_idk_threshold_pct: float = 0.0
     excluded: bool = False
     exclusion_reason: str | None = None
     notes: list[str] = field(default_factory=list)
@@ -217,7 +215,6 @@ def describe_claim(claim_id: str, series: pd.Series, cfg: Config) -> ClaimDescri
     x = valid_scores(series)
     n_valid = int(x.size)
     idk_rate = n_idk / n_total if n_total else 0.0
-    high_idk_pct = float(cfg.get("descriptives.high_idk_rate_pct"))
 
     freqs = {v: int((x == v).sum()) for v in scale}
     pcts = {v: (freqs[v] / n_valid * 100 if n_valid else 0.0) for v in scale}
@@ -232,8 +229,7 @@ def describe_claim(claim_id: str, series: pd.Series, cfg: Config) -> ClaimDescri
             neutral_pct=None, bimodal=False,
             bimodality_reason=assessment.reason,
             bimodality_coefficient=None, bimodality=assessment,
-            high_idk=idk_rate * 100 >= high_idk_pct,
-            high_idk_threshold_pct=high_idk_pct, excluded=True,
+            excluded=True,
             exclusion_reason="no answers on the 1-5 scale (all IDK or missing)",
         )
 
@@ -261,8 +257,6 @@ def describe_claim(claim_id: str, series: pd.Series, cfg: Config) -> ClaimDescri
         bimodality_reason=assessment.reason,
         bimodality_coefficient=assessment.coefficient,
         bimodality=assessment,
-        high_idk=idk_rate * 100 >= high_idk_pct,
-        high_idk_threshold_pct=high_idk_pct,
     )
 
 

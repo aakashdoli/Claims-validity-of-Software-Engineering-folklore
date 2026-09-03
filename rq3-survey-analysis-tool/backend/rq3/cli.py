@@ -47,7 +47,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     print(f"  comments     {m.n_comments}")
     print(f"  flagged      {result.quality.n_flagged} respondent(s)")
     print(f"  exclusions   {len(result.exclusions)}")
-    print(f"  borderline   {result.matrix.n_borderline} claim(s)")
+    b = result.matrix.bucket_counts
+    print(f"  buckets      clear_direction {b['clear_direction']} · "
+          f"mixed {b['mixed']} · idk_dominant {b['idk_dominant']}")
+    print(f"  matrix       match {result.matrix.n_match} · "
+          f"mismatch {result.matrix.n_mismatch} · "
+          f"not scored {result.matrix.n_not_scored}")
+    e = result.experience
+    print(f"  experience   {e.group_1_label} n={e.group_1_total} vs "
+          f"{e.group_2_label} n={e.group_2_total}")
+    print(f"               {e.n_tested} Mann-Whitney tests, "
+          f"{e.n_significant_raw} raw sig, "
+          f"{e.n_significant_corrected} after {e.method}")
     print(f"  pending RQ2  {result.matrix.n_pending_evidence} claim(s)")
     for f in result.families:
         print(f"  BH {f.variable:<13} {f.n_significant_adjusted}/{f.n_tests} significant "

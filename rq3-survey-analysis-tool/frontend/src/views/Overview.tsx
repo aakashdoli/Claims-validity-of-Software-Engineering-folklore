@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Caveat, Chip, DistBar, LikertLegend, Tile, fmtNum } from '../components/common'
+import { Caveat, Chip, DistBar, LikertLegend, Tile, fmtNum, pText } from '../components/common'
 import { api } from '../api'
 import type { ClaimRow, Overview as OverviewData } from '../types'
 
@@ -15,9 +15,10 @@ const FLAG_OPTIONS = [
   ['', 'All claims'],
   ['bimodal', 'Bimodal distribution'],
   ['mismatch', 'Belief–evidence mismatch'],
-  ['borderline', 'Borderline against threshold'],
-  ['significant', 'Has a significant subgroup difference'],
-  ['high_idk', 'IDK rate ≥ 25%'],
+  ['mixed', 'No clear majority'],
+  ['idk_dominant', 'IDK-dominant'],
+  ['experience', 'Experience difference after BH'],
+  ['high_idk', 'IDK rate ≥ 30%'],
 ] as const
 
 export function Overview({ data, onOpenClaim }: {
@@ -29,7 +30,8 @@ export function Overview({ data, onOpenClaim }: {
   const evidenceOptions = useMemo(
     () => Array.from(new Set(data.claims.map(c => c.evidence_label))).sort(), [data.claims])
   const beliefOptions = useMemo(
-    () => Array.from(new Set(data.claims.map(c => c.belief_class))).sort(), [data.claims])
+    () => Array.from(new Set(data.claims.map(c => c.belief_label).filter(Boolean)))
+      .sort() as string[], [data.claims])
 
   const rows = useMemo(() => {
     const needle = f.q.trim().toLowerCase()
@@ -37,13 +39,14 @@ export function Overview({ data, onOpenClaim }: {
       if (needle && !(`${c.claim_id} ${c.survey_text} ${c.book}`.toLowerCase().includes(needle)))
         return false
       if (f.evidence && c.evidence_label !== f.evidence) return false
-      if (f.belief && c.belief_class !== f.belief) return false
+      if (f.belief && c.belief_label !== f.belief) return false
       switch (f.flag) {
         case 'bimodal': return c.bimodal
         case 'mismatch': return c.belief_evidence_mismatch
-        case 'borderline': return c.borderline
-        case 'significant': return !!c.significant_variables
-        case 'high_idk': return c.idk_rate_pct >= 25
+        case 'experience': return c.significant_after_correction
+        case 'mixed': return c.bucket === 'mixed'
+        case 'idk_dominant': return c.bucket === 'idk_dominant'
+        case 'high_idk': return c.idk_rate_pct >= 30
         default: return true
       }
     })
@@ -79,13 +82,15 @@ export function Overview({ data, onOpenClaim }: {
         <Tile label="Respondents" value={s.n_respondents}
               note={`${s.n_flagged_respondents} flagged for review`} />
         <Tile label="Claims" value={s.n_claims} note={`${s.n_comments} free-text comments`} />
-        <Tile label="Belief–evidence mismatches" value={s.n_mismatch}
-              note="believed but contradicted, or vice versa" />
-        <Tile label="Bimodal claims" value={s.n_bimodal} note="answers split, median hides it" />
-        <Tile label="Borderline claims" value={s.n_borderline}
-              note="within 0.2 of the belief threshold" flagged={s.n_borderline > 0} />
-        <Tile label="Median IDK rate" value={`${fmtNum(s.median_idk_rate_pct, 1)}%`}
-              note="excluded from medians and tests" />
+        <Tile label="Clear direction" value={s.bucket_counts.clear_direction}
+              note="a majority went one way — these form the matrix" />
+        <Tile label="No clear majority" value={s.bucket_counts.mixed}
+              note="neither side passed 50% of directional answers" />
+        <Tile label="IDK-dominant" value={s.bucket_counts.idk_dominant}
+              note="30%+ of the full sample could not answer"
+              flagged={s.bucket_counts.idk_dominant > 0} />
+        <Tile label="Belief–evidence mismatches" value={`${s.n_mismatch} / ${s.n_scored}`}
+              note="of the scored claims" />
       </div>
 
       <div className="card">
@@ -132,7 +137,7 @@ export function Overview({ data, onOpenClaim }: {
           <label htmlFor="ev">RQ2 evidence label</label>
           <select id="ev" value={f.evidence} onChange={e => setF({ ...f, evidence: e.target.value })}>
             <option value="">All labels</option>
-            {evidenceOptions.map(o => <option key={o} value={o}>{o}</option>)}
+            {evidenceOptions.filter(Boolean).map(o => <option key={o} value={o!}>{o}</option>)}
           </select>
         </div>
         <div className="field">
@@ -166,14 +171,14 @@ export function Overview({ data, onOpenClaim }: {
                 {th('q_number', 'Q', 'num')}
                 {th('claim_id', 'Claim')}
                 <th>Distribution (valid answers)</th>
-                {th('median', 'Median', 'num')}
-                {th('iqr', 'IQR', 'num')}
+                {th('pct_agree', '% agree', 'num')}
+                {th('pct_disagree', '% disagree', 'num')}
+                {th('directional_denominator', 'directional n', 'num')}
                 {th('idk_rate_pct', 'IDK %', 'num')}
-                {th('n_valid', 'n valid', 'num')}
-                <th>Flags</th>
+                {th('bucket', 'Bucket')}
+                {th('belief_label', 'Majority')}
                 {th('evidence_label', 'RQ2 evidence')}
-                {th('belief_class', 'Belief')}
-                {th('significant_variables', 'Significant subgroups')}
+                {th('mannwhitney_p_corrected', 'Experience BH p', 'num')}
                 {th('n_comments', 'Comments', 'num')}
                 {th('book', 'Source book')}
                 {th('author', 'Author')}
@@ -182,45 +187,44 @@ export function Overview({ data, onOpenClaim }: {
             </thead>
             <tbody>
               {rows.map(r => (
-                <tr key={r.claim_id} className={r.excluded ? 'excluded' : undefined}>
+                <tr key={r.claim_id} className={r.in_matrix ? undefined : 'excluded'}>
                   <td className="num">{r.q_number}</td>
                   <td className="claim-link">
                     <button onClick={() => onOpenClaim(r.claim_id)}>{r.claim_id}</button>
                   </td>
                   <td><DistBar row={r} /></td>
-                  <td className="num"><strong>{fmtNum(r.median, 1)}</strong></td>
-                  <td className="num">{fmtNum(r.iqr, 1)}</td>
+                  <td className="num"><strong>
+                    {r.pct_agree == null ? '—' : `${fmtNum(r.pct_agree, 1)}%`}</strong></td>
                   <td className="num">
-                    {fmtNum(r.idk_rate_pct, 1)}
-                    {r.high_idk && <span title="High IDK rate — needs manual review"
-                                         style={{ color: 'var(--status-serious)' }}> ⚑</span>}
-                  </td>
-                  <td className="num">{r.n_valid}</td>
+                    {r.pct_disagree == null ? '—' : `${fmtNum(r.pct_disagree, 1)}%`}</td>
+                  <td className="num">{r.directional_denominator}</td>
+                  <td className="num">{fmtNum(r.idk_rate_pct, 1)}</td>
                   <td>
-                    {r.bimodal && <Chip kind="warning" title="Answers split at both ends; the median alone is misleading">bimodal</Chip>}{' '}
-                    {r.high_idk && <Chip kind="warning" title="IDK rate at or above the review threshold; the median rests on a shrinking subset">high IDK</Chip>}{' '}
-                    {r.borderline && <Chip kind="warning" title="Median within 0.2 of the belief threshold — classification provisional">borderline</Chip>}{' '}
-                    {r.belief_evidence_mismatch &&
-                      <Chip kind="critical" title={r.mismatch_kind ?? ''}>⚑ mismatch</Chip>}
-                    {r.excluded && <Chip kind="muted" title={r.exclusion_reason ?? ''}>excluded</Chip>}
+                    {r.bucket === 'clear_direction' && <Chip kind="good">clear direction</Chip>}
+                    {r.bucket === 'mixed' && <Chip kind="muted" title={r.bucket_reason}>no majority</Chip>}
+                    {r.bucket === 'idk_dominant' && <Chip kind="warning" title={r.bucket_reason}>IDK-dominant</Chip>}
+                    {r.bimodal && <> <Chip kind="warning">bimodal</Chip></>}
+                    {r.belief_evidence_mismatch && <> <Chip kind="critical" title={r.mismatch_kind ?? ''}>⚑ mismatch</Chip></>}
                   </td>
-                  <td>{r.evidence_label === 'PENDING'
-                    ? <Chip kind="muted" title="RQ2 label not entered yet">PENDING</Chip>
-                    : <>
-                        {r.evidence_label}
-                        {r.evidence_strength && (
-                          <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
-                            {r.evidence_strength}
-                          </div>
-                        )}
-                        {!r.scored && r.evidence_label !== 'PENDING' && (
-                          <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
-                            not scored
-                          </div>
-                        )}
-                      </>}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{r.belief_class}</td>
-                  <td>{r.significant_variables || <span className="excluded">none</span>}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {r.belief_label ?? <span className="excluded">—</span>}</td>
+                  <td>{!r.in_matrix
+                    ? <span className="excluded">n/a</span>
+                    : r.evidence_label === 'PENDING'
+                      ? <Chip kind="muted">PENDING</Chip>
+                      : <>{r.evidence_label}
+                          {r.evidence_strength && (
+                            <div style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>
+                              {r.evidence_strength}</div>)}</>}</td>
+                  <td className="num">
+                    {r.mannwhitney_p_corrected == null
+                      ? <span className="excluded">—</span>
+                      : <>
+                          {pText(r.mannwhitney_p_corrected)}
+                          {r.significant_after_correction && (
+                            <div style={{ fontSize: 10.5, color: 'var(--status-good)' }}>
+                              ✓ r = {fmtNum(r.effect_size, 3)}</div>)}
+                        </>}</td>
                   <td className="num">{r.n_comments}</td>
                   <td style={{ minWidth: 190, maxWidth: 260 }}>
                     {r.book === 'MISSING'

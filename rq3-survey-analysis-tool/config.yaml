@@ -43,10 +43,6 @@ idk_rule:
   report_rate_separately: true
 
 descriptives:
-  # A claim whose IDK rate reaches this is flagged for manual review: at this
-  # level the median is being computed from a shrinking, self-selected subset of
-  # respondents, which is a finding in its own right and a caveat on the claim.
-  high_idk_rate_pct: 25.0
 
   # Stage 1 bimodality flag. Primary rule is the explicit tail/middle heuristic;
   # Sarle's bimodality coefficient is computed alongside it as a cross-check but
@@ -106,30 +102,55 @@ evidence:
   min_text_similarity: 0.60
 
 belief:
-  # Stage 5. PENDING DAVIDE'S SIGN-OFF — DO NOT TREAT AS FINAL.
-  # A claim counts as "widely believed" when its median (IDK excluded) is >=
-  # this value. 3.5 is a placeholder carried over from the survey plan.
-  threshold: 3.5
-  # Claims whose median sits within this distance of the threshold are marked
-  # borderline and require manual review before being reported as classified.
-  borderline_delta: 0.2
+  # Stage 5. Claims are bucketed by the DIRECTION a majority took, not by a
+  # median. Two different denominators are used, deliberately:
+  #
+  #   directional  = respondents who picked one of the five substantive points
+  #                  (IDK excluded).  Used for the majority rule.
+  #   full sample  = every respondent shown the claim, IDK included.
+  #                  Used only for the IDK-dominance rule.
+  #
+  # Order matters: IDK dominance is evaluated FIRST and short-circuits the
+  # majority calculation entirely.
+  idk_dominance:
+    # A claim where this share of the FULL sample answered "I don't know" is
+    # reported on its own terms rather than classified: the directional split
+    # would describe a self-selected minority. Raised from 0.25, where it was
+    # only a review flag; it now excludes the claim from the matrix.
+    threshold: 0.30
+  majority:
+    # Strictly greater than: an exact 50/50 split is "mixed", not a majority.
+    # Neutral answers count toward the denominator but toward neither side.
+    threshold: 0.50
   # THREE categories only. Strength qualifiers ("weak evidence", "moderate
   # evidence", "mixed/contextual") are NOT separate categories: the importer
   # collapses them onto the base label and preserves the wording in the
-  # separate `evidence_strength` field, so nothing is lost but the matrix stays
-  # a 2 x 3 grid.
+  # separate `evidence_strength` field, which is prose, not a fourth label.
   evidence_labels:
     - "SUPPORTED"
     - "CONTRADICTED"
     - "NO EVIDENCE FOUND"
   # Labels that are NOT scored as match or mismatch. A claim with no evidence
-  # located cannot agree or disagree with belief — there is nothing to agree
-  # with — so it gets its own bucket in the matrix and is excluded from the
-  # match/mismatch counts rather than being counted as either.
+  # located cannot agree or disagree with a majority — there is nothing to agree
+  # with — so it keeps its own column and sits outside the match/mismatch counts.
   unscored_labels:
     - "NO EVIDENCE FOUND"
   # Label used for claims whose RQ2 mapping has not been entered yet.
   pending_label: "PENDING"
+
+experience_split:
+  # The survey collected four bands, not continuous years, so no 5-year cut is
+  # available — no band breaks at that point. The only split the data supports
+  # is at ten years, which is also the only one leaving both groups usable.
+  variable: "experience"
+  group_1:
+    label: "Under 10 years"
+    bands: ["Less than 1 year", "1 to 3 years", "4 to 9 years"]
+  group_2:
+    label: "10+ years"
+    bands: ["10+ years"]
+  # Descriptive only — too many categories for a two-group test.
+  descriptive_variable: "role"
 
 comments:
   # Stage 6. Retrieval / filtering / prioritisation only — the tool does not
