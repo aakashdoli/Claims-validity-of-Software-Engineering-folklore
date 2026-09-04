@@ -25,6 +25,11 @@ despite contradicting evidence, 1 disbelieved despite supporting evidence.**
 
 Setup and usage instructions live in each tool's own README.
 
+Verified pipeline output for the run cited throughout the thesis is in
+`rq3-survey-analysis-tool/data/results/20260904T170248Z-d602c796/`, including
+the belief-evidence matrix, evidence label distribution, and subgroup
+comparison outputs.
+
 ---
 
 ## Repository notes
