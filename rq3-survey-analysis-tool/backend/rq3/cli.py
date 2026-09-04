@@ -1,6 +1,6 @@
 """Command line entry points.
 
-    python -m rq3.cli build-claims [--source data/source/Final_50_Claims.xlsx]
+    python -m rq3.cli build-claims [--source data/source/Final_50_Claims_Public.xlsx]
     python -m rq3.cli run [--input <export.xlsx>] [--config config.yaml]
     python -m rq3.cli summary
 """
@@ -18,7 +18,7 @@ from .pipeline import export_all, run
 
 def _cmd_build_claims(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
-    source = Path(args.source) if args.source else PROJECT_ROOT / "data/source/Final_50_Claims.xlsx"
+    source = Path(args.source) if args.source else PROJECT_ROOT / "data/source/Final_50_Claims_Public.xlsx"
     claims_path = cfg.resolve_path("dataset.claims_file")
     evidence_path = cfg.resolve_path("dataset.evidence_file")
 

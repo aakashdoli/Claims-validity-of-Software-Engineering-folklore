@@ -3,7 +3,7 @@
 Two files, deliberately kept separate:
 
 ``data/claims.csv``
-    GENERATED from ``data/source/Final_50_Claims.xlsx`` (the authoritative
+    GENERATED from ``data/source/Final_50_Claims_Public.xlsx`` (the authoritative
     claim set, cross-verified against ``364_claims.xlsx`` and ``master.xlsx``)
     plus the survey wording read back out of the export itself. Regenerating it
     is always safe — it holds no hand-entered content.
@@ -16,7 +16,7 @@ Two files, deliberately kept separate:
 
 Claim IDs are NOT unique across the full 4,091-claim corpus (the extraction
 pipeline reused IDs across books), which is why the ordered, book-qualified
-row from ``Final_50_Claims.xlsx`` is the identity used here, and why the
+row from ``Final_50_Claims_Public.xlsx`` is the identity used here, and why the
 survey's own question order is the join key against the export.
 """
 

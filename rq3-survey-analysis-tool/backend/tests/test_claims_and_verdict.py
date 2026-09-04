@@ -11,7 +11,7 @@ from rq3.analysis.matrix import build_matrix
 from rq3.claims import MISSING, ClaimsError, build_claims_csv, load_claims
 from rq3.config import PROJECT_ROOT
 
-SOURCE = PROJECT_ROOT / "data" / "source" / "Final_50_Claims.xlsx"
+SOURCE = PROJECT_ROOT / "data" / "source" / "Final_50_Claims_Public.xlsx"
 
 
 def _write_sheet(path, rows: list[list], sheet="Final 50 Claims"):

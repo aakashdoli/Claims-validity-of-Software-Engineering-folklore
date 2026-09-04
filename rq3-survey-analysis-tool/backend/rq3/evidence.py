@@ -359,7 +359,7 @@ def read_workbook(path: str | Path, claims: pd.DataFrame,
     xl = pd.ExcelFile(path)
     clm_sheets = [s for s in xl.sheet_names if str(s).upper().startswith("CLM-")]
     # A one-row-per-claim table is tried FIRST. Workbooks often keep a stray
-    # per-claim sheet alongside the main table (Final_50_Claims.xlsx still has a
+    # per-claim sheet alongside the main table (Final_50_Claims_Public.xlsx still has a
     # leftover CLM-000179 tab), and reading that one sheet instead of the table
     # would silently import 1 claim and report the other 49 as missing.
     try:

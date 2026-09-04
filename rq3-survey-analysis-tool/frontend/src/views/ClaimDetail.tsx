@@ -593,12 +593,12 @@ export function ClaimDetail() {
           <dt>Claim ID</dt><dd>{d.claim.claim_id}</dd>
           <dt>Source book</dt>
           <dd>{d.claim.book === 'MISSING'
-            ? <Chip kind="warning" title="Not recorded in Final_50_Claims.xlsx">MISSING</Chip>
+            ? <Chip kind="warning" title="Not recorded in Final_50_Claims_Public.xlsx">MISSING</Chip>
             : d.claim.book}</dd>
           <dt>Author</dt>
           <dd>{d.claim.author === 'MISSING'
             ? <Chip kind="warning"
-                    title="Final_50_Claims.xlsx has no author column; not inferred from the book title">
+                    title="Final_50_Claims_Public.xlsx has no author column; not inferred from the book title">
                 MISSING</Chip>
             : d.claim.author}</dd>
           <dt>RQ2 evidence label</dt>

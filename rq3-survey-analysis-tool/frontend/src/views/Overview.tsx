@@ -228,13 +228,13 @@ export function Overview({ data, onOpenClaim }: {
                   <td className="num">{r.n_comments}</td>
                   <td style={{ minWidth: 190, maxWidth: 260 }}>
                     {r.book === 'MISSING'
-                      ? <Chip kind="warning" title="Not recorded in Final_50_Claims.xlsx">MISSING</Chip>
+                      ? <Chip kind="warning" title="Not recorded in Final_50_Claims_Public.xlsx">MISSING</Chip>
                       : r.book}
                   </td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {r.author === 'MISSING'
                       ? <Chip kind="warning"
-                              title="Final_50_Claims.xlsx has no author column — not inferred from the book title">
+                              title="Final_50_Claims_Public.xlsx has no author column — not inferred from the book title">
                           MISSING</Chip>
                       : r.author}
                   </td>

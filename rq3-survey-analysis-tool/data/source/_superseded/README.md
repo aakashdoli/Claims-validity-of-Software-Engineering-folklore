@@ -12,4 +12,4 @@ underlying evidence-mapping work is sound; only this derived summary is broken.
 Kept as a record of the data-integrity problem and as the fixture for
 `test_the_supervisor_summary_fails_the_gate_for_most_claims`.
 
-Superseded by the Evidence Label column in `Final_50_Claims.xlsx`.
+Superseded by the Evidence Label column in `Final_50_Claims_Public.xlsx`.

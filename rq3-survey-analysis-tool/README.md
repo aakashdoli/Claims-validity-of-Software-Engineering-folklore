@@ -73,7 +73,7 @@ flowchart TB
     subgraph inputs [" "]
         direction LR
         XLSX["BTHSurvey export<br/><i>751 responses</i>"]
-        CLAIMS["Final_50_Claims.xlsx<br/><i>50 claims + RQ2 labels</i>"]
+        CLAIMS["Final_50_Claims_Public.xlsx<br/><i>50 claims + RQ2 labels</i>"]
     end
 
     XLSX --> DECODE["<b>Decode</b><br/>VariableView → tidy table<br/>IDK kept as a sentinel, never a number"]
@@ -253,7 +253,7 @@ frontend/src/            React + TypeScript + Vite + Recharts
 data/
   claims.csv             GENERATED — safe to rebuild
   claims_evidence.csv    RQ2 labels — hand-maintained
-  source/                Final_50_Claims.xlsx and the RQ2 label workbooks
+  source/                Final_50_Claims_Public.xlsx · Evidence_Summary_Public.xlsx
   raw/ processed/        respondent-level — NOT in Git
   results/<run_id>/      aggregate exports + manifest
 ```
