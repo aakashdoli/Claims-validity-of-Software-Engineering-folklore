@@ -1,0 +1,10 @@
+# sampling_caveat: Purposive sampling subject to availability constraints. Results describe the beliefs of the surveyed sample, not of software engineering practitioners in general, and no inference to a wider population is supported (Baltes & Ralph, 2022, Empirical Software Engineering).
+# question_order_caveat: BTHSurvey provides no question-order randomisation, so all 50 claims were presented in a fixed order to every respondent. Order effects (fatigue, priming, anchoring) cannot be estimated or corrected for by this tool and stand as a documented construct-validity limitation.
+# classification_rule: majority > 50% of directional answers; IDK-dominant at >= 30% of the full sample
+# run_id: 20260904T170248Z-d602c796
+# input_file: data/raw/export (4).xlsx
+# input_sha256: d602c796f3cbfb3f5322be5551f12e280f71dbd1880fbd430253c4518e4ddd95
+bucket,n_claims,pct_of_claims
+clear_direction,33,66.0
+mixed,5,10.0
+idk_dominant,12,24.0

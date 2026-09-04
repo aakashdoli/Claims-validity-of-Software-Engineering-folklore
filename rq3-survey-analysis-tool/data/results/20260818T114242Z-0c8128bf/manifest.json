@@ -2,13 +2,13 @@
   "tool_version": "1.0.0",
   "run_id": "20260818T114242Z-0c8128bf",
   "timestamp_utc": "2026-08-18T11:42:42.526628+00:00",
-  "input_file": "/Users/aakashdoli/Master Thesis/RQ3 Survey Analysis Tool/data/raw/export (2).xlsx",
+  "input_file": "data/raw/export (2).xlsx",
   "input_sha256": "0c8128bf740eb6cdbb10ef49b13c4a495e6ac6190bf340ef86281c894f0a00e1",
   "input_bytes": 722333,
   "n_respondents": 743,
   "n_claims": 50,
   "n_comments": 5517,
-  "config_path": "/Users/aakashdoli/Master Thesis/RQ3 Survey Analysis Tool/config.yaml",
+  "config_path": "config.yaml",
   "config": {
     "dataset": {
       "input_file": "data/raw/export (2).xlsx",

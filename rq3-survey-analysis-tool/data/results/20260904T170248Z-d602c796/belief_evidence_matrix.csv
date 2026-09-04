@@ -1,0 +1,13 @@
+# sampling_caveat: Purposive sampling subject to availability constraints. Results describe the beliefs of the surveyed sample, not of software engineering practitioners in general, and no inference to a wider population is supported (Baltes & Ralph, 2022, Empirical Software Engineering).
+# question_order_caveat: BTHSurvey provides no question-order randomisation, so all 50 claims were presented in a fixed order to every respondent. Order effects (fatigue, priming, anchoring) cannot be estimated or corrected for by this tool and stand as a documented construct-validity limitation.
+# classification_rule: majority > 50% of directional answers; IDK-dominant at >= 30% of the full sample
+# run_id: 20260904T170248Z-d602c796
+# input_file: data/raw/export (4).xlsx
+# input_sha256: d602c796f3cbfb3f5322be5551f12e280f71dbd1880fbd430253c4518e4ddd95
+belief_class,evidence_label,count,claim_ids
+Majority agreed,SUPPORTED,21,CLM-000179; CLM-000028; CLM-000086; CLM-000131; CLM-000101; CLM-000059; CLM-000329; CLM-000060; CLM-000073; CLM-000147; CLM-000269; CLM-000142; CLM-000242; CLM-000199; CLM-000109; CLM-000190; CLM-000097; CLM-000180; CLM-000502; CLM-000129; CLM-000032
+Majority agreed,CONTRADICTED,4,CLM-000085; CLM-000045; CLM-000496; CLM-000169
+Majority agreed,NO EVIDENCE FOUND,4,CLM-000087; CLM-000450; CLM-000210; CLM-000201
+Majority disagreed,SUPPORTED,1,CLM-000007
+Majority disagreed,CONTRADICTED,2,CLM-000204; CLM-000337
+Majority disagreed,NO EVIDENCE FOUND,1,CLM-000223

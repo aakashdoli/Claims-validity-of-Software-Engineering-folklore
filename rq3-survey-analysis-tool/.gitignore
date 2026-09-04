@@ -7,6 +7,12 @@ data/processed/
 # ...and any stray export left elsewhere in the tree
 export*.xlsx
 **/export*.xlsx
+
+# The repository root .gitignore carries a repo-wide `*.csv` rule, which would
+# otherwise swallow the aggregate run exports. Re-include them here; the two
+# respondent-level files are re-excluded immediately below, and because the
+# LAST matching pattern wins, those exclusions still hold.
+!data/results/*/*.csv
 data/results/*/full_run.json
 data/results/*/flagged_respondents.csv
 
